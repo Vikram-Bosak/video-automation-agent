@@ -1,0 +1,137 @@
+name: 🎬 Video Automation Pipeline
+
+on:
+  schedule:
+    # हर 2 घंटे में run (UTC time — IST = UTC+5:30)
+    # IST 00:00 = UTC 18:30 → cron: '30 18 * * *'
+    # Pattern: हर 2 घंटे मतलब UTC: 0:30, 2:30, 4:30, 6:30, 8:30, 10:30, 12:30, 14:30, 16:30, 18:30, 20:30, 22:30
+    - cron: '30 */2 * * *'
+
+  # Manual trigger (testing के लिए)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (Sheet check karo, browser mat chalao)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  generate-video:
+  # ──────────────────────────────────────────────────────────────────────────
+    name: 🎬 Generate & Upload Video
+    runs-on: ubuntu-latest
+    timeout-minutes: 90      # Video generation में time लगता है (max 1.5 hours)
+
+    steps:
+
+      # ── Checkout ─────────────────────────────────────────────────────────
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      # ── Python Setup ──────────────────────────────────────────────────────
+      - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      # ── Dependencies ──────────────────────────────────────────────────────
+      - name: 📦 Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── Playwright Browsers ───────────────────────────────────────────────
+      - name: 🌐 Install Playwright + Chromium
+        run: |
+          playwright install chromium --with-deps
+
+      # ── Directories ───────────────────────────────────────────────────────
+      - name: 📁 Create Required Directories
+        run: mkdir -p downloads logs
+
+      # ── Restore State (across runs persist karne ke liye) ─────────────────
+      - name: 💾 Restore State Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            state.json
+            cookies.json
+          key: pipeline-state-${{ github.ref_name }}
+          restore-keys: |
+            pipeline-state-
+
+      # ── Run Pipeline ──────────────────────────────────────────────────────
+      - name: 🚀 Run Video Pipeline
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID:           ${{ secrets.SHEET_ID }}
+          SHEET_NAME:         ${{ secrets.SHEET_NAME }}
+          DRIVE_FOLDER_ID:    ${{ secrets.DRIVE_FOLDER_ID }}
+          WEBSITE_URL:        ${{ secrets.WEBSITE_URL }}
+          WEBSITE_EMAIL:      ${{ secrets.WEBSITE_EMAIL }}
+          WEBSITE_PASSWORD:   ${{ secrets.WEBSITE_PASSWORD }}
+          BROWSER_HEADLESS:   'true'
+          LOG_LEVEL:          'INFO'
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "🔍 DRY RUN MODE — only checking Sheet"
+            python -c "
+          from agents.sheet_reader import SheetReader
+          sr = SheetReader()
+          row = sr.get_next_pending_row()
+          if row:
+              print(f'✅ Pending row found: Row {row.row_index} | {row.title}')
+          else:
+              print('ℹ️  No pending rows')
+          "
+          else
+            python main.py
+          fi
+
+      # ── Save State ────────────────────────────────────────────────────────
+      - name: 💾 Save State Cache
+        if: always()   # Success या failure — दोनों में save करो
+        uses: actions/cache@v4
+        with:
+          path: |
+            state.json
+            cookies.json
+          key: pipeline-state-${{ github.ref_name }}-${{ github.run_number }}
+
+      # ── Upload Logs (always, even on failure) ─────────────────────────────
+      - name: 📋 Upload Run Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-run-${{ github.run_number }}
+          path: logs/
+          retention-days: 14
+
+      # ── Upload Screenshots (failure debug) ───────────────────────────────
+      - name: 📸 Upload Screenshots (Debug)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots-${{ github.run_number }}
+          path: logs/*.png
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ── Summary ───────────────────────────────────────────────────────────
+      - name: 📊 Job Summary
+        if: always()
+        run: |
+          echo "## 🎬 Video Pipeline Run #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run Number | ${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered By | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Time (UTC) | $(date -u) |" >> $GITHUB_STEP_SUMMARY

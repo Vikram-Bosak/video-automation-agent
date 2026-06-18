@@ -1,0 +1,38 @@
+# .gitignore
+# ─────────────
+
+# Secrets — NEVER commit
+.env
+service_account.json
+cookies.json
+*.json
+
+# Allow state file template
+!state.json.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Downloads & Logs (temporary)
+downloads/
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
