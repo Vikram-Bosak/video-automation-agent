@@ -3,12 +3,13 @@ main.py
 ───────
 Video Automation Pipeline का main orchestrator।
 
+Website: Google Vids (docs.google.com/videos) — Veo 3.1
 Flow:
-  1. Google Sheet से next pending row पढ़ो
-  2. Browser agent से videos generate & download करो
-  3. Google Drive पर upload करो
-  4. Sheet में status "done" mark करो
-  5. State save करो
+  1. Google Sheet से next pending row पढ़ो (Title + 3 Prompts)
+  2. Google Vids पर 3 × 8s clips generate करो = 24s video
+  3. Video download करो, Title के अनुसार rename करो
+  4. Google Drive पर upload करो
+  5. Sheet में status "done" mark करो
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from pathlib import Path
 
 from config.settings import LOGS_DIR, LOG_LEVEL
 from agents.sheet_reader  import SheetReader, VideoRow
-from agents.browser_agent import run_browser_agent
+from agents.google_vids_agent import run_google_vids_agent
 from agents.drive_uploader import DriveUploader
 from agents.state_manager  import StateManager
 
@@ -95,10 +96,12 @@ def run_pipeline() -> int:
         logger.info(f"\n🌐 STEP 2: Browser agent start kar rahe hain...")
         logger.info(f"   Row: {row.row_index} | Title: {row.title}")
 
-        downloaded_files = run_browser_agent(row)
+        downloaded_file = run_google_vids_agent(row)
 
-        if not downloaded_files:
+        if not downloaded_file:
             raise RuntimeError(f"Koi video download nahi hua for row {row.row_index}")
+
+        downloaded_files = [downloaded_file]
 
         logger.info(f"✅ {len(downloaded_files)} video(s) download hui:")
         for f in downloaded_files:
