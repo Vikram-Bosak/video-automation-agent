@@ -24,7 +24,7 @@ jobs:
   generate-video:
   # ──────────────────────────────────────────────────────────────────────────
     name: 🎬 Generate & Upload Video
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 90      # Video generation में time लगता है (max 1.5 hours)
 
     steps:
