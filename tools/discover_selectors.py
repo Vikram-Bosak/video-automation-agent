@@ -31,6 +31,7 @@ async def discover():
         browser = await p.chromium.launch(
             headless=False,  # देखना है
             slow_mo=500,
+            executable_path='/usr/bin/google-chrome'
         )
 
         context_opts = {"viewport": {"width": 1366, "height": 768}}

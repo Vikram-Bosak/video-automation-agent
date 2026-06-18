@@ -59,12 +59,15 @@ jobs:
       - name: 💾 Restore State Cache
         uses: actions/cache@v4
         with:
-          path: |
-            state.json
-            cookies.json
+          path: state.json
           key: pipeline-state-${{ github.ref_name }}
           restore-keys: |
             pipeline-state-
+
+      # ── Inject Cookies ────────────────────────────────────────────────────
+      - name: 🍪 Inject Google Cookies
+        run: |
+          echo "${{ secrets.GOOGLE_COOKIES }}" | base64 -d > cookies.json
 
       # ── Run Pipeline ──────────────────────────────────────────────────────
       - name: 🚀 Run Video Pipeline
@@ -99,9 +102,7 @@ jobs:
         if: always()   # Success या failure — दोनों में save करो
         uses: actions/cache@v4
         with:
-          path: |
-            state.json
-            cookies.json
+          path: state.json
           key: pipeline-state-${{ github.ref_name }}-${{ github.run_number }}
 
       # ── Upload Logs (always, even on failure) ─────────────────────────────
