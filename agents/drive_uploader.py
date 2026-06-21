@@ -17,6 +17,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from config.settings import DRIVE_FOLDER_ID, get_google_credentials_dict
+from agents.retry_utils import retry_on_failure
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ class DriveUploader:
 
     # ─── Public Interface ─────────────────────────────────────────────────────
 
+    @retry_on_failure(max_attempts=3, delay_sec=3.0, retryable_exceptions=(HttpError, Exception))
     def upload_video(self, file_path: Path, folder_id: Optional[str] = None) -> Optional[str]:
         """
         Video file Google Drive में upload करता है।

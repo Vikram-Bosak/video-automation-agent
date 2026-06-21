@@ -5,7 +5,9 @@
 .env
 service_account.json
 cookies.json
-*.json
+
+# Runtime state (generated during runs)
+state.json
 
 # Allow state file template
 !state.json.example

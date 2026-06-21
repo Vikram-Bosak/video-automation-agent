@@ -22,6 +22,7 @@ from config.settings import (
     STATUS_PENDING, STATUS_RUNNING, STATUS_DONE, STATUS_FAILED,
     get_google_credentials_dict,
 )
+from agents.retry_utils import retry_on_failure
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,13 @@ class SheetReader:
                 if not video_row.title:
                     logger.debug(f"Row {row_num} — title empty, skip karenge")
                     continue
+
+                # Double-check: row abhi bhi pending hai? (race condition guard)
+                current_status = self._get_cell(row, COL_STATUS).strip().lower()
+                if current_status not in (STATUS_PENDING, ""):
+                    logger.info(f"Row {row_num} abhi '{current_status}' hai — skip karenge (another run picked it up)")
+                    continue
+
                 logger.info(f"📋 Pending row mili: Row {row_num} | Title: {video_row.title}")
                 return video_row
 
@@ -126,6 +134,7 @@ class SheetReader:
 
     # ─── Private Helpers ──────────────────────────────────────────────────────
 
+    @retry_on_failure(max_attempts=3, delay_sec=2.0, retryable_exceptions=(HttpError, Exception))
     def _fetch_all_rows(self) -> list[list]:
         """Sheet से सभी rows fetch करता है (header row skip)।"""
         try:
@@ -159,6 +168,7 @@ class SheetReader:
             return str(row[col_idx]).strip()
         return ""
 
+    @retry_on_failure(max_attempts=3, delay_sec=2.0, retryable_exceptions=(HttpError, Exception))
     def _update_cell(self, row_num: int, col_idx: int, value: str) -> None:
         """एक specific cell update करता है।"""
         # Column index को letter में convert करो (0→A, 1→B, ...)

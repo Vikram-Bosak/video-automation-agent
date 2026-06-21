@@ -84,15 +84,7 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             echo "🔍 DRY RUN MODE — only checking Sheet"
-            python -c "
-          from agents.sheet_reader import SheetReader
-          sr = SheetReader()
-          row = sr.get_next_pending_row()
-          if row:
-              print(f'✅ Pending row found: Row {row.row_index} | {row.title}')
-          else:
-              print('ℹ️  No pending rows')
-          "
+            python tools/dry_run.py
           else
             python main.py
           fi
