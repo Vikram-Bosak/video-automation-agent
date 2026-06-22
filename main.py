@@ -19,7 +19,10 @@ import sys
 import time
 from pathlib import Path
 
-from config.settings import LOGS_DIR, LOG_LEVEL
+sys.stdout.reconfigure(encoding="utf-8")
+
+
+from config.settings import LOGS_DIR, LOG_LEVEL, WEBSITE_URL
 from agents.sheet_reader  import SheetReader, VideoRow
 from agents.google_vids_agent import run_google_vids_agent
 from agents.drive_uploader import DriveUploader
@@ -67,41 +70,53 @@ def run_pipeline() -> int:
     logger.info("  🚀 VIDEO AUTOMATION PIPELINE STARTING")
     logger.info("=" * 60)
 
-    state   = StateManager()
-    sheet   = SheetReader()
-    drive   = DriveUploader()
-
-    # ── Step 1: Next pending row पढ़ो ─────────────────────────────────────────
-    logger.info("\n📋 STEP 1: Google Sheet से pending row dhundh rahe hain...")
-
-    row: VideoRow | None = sheet.get_next_pending_row()
-
-    if row is None:
-        logger.info("✅ Koi pending row nahi — pipeline band ho rahi hai.")
-        state.no_pending()
-        return 2   # Exit code 2 = no work to do (not an error)
-
-    logger.info(f"✅ Mili: Row {row.row_index} | Title: '{row.title}'")
-    logger.info(f"   Prompts: {len(row.get_prompts())}")
-
-    # ── Step 2: Row को "running" mark करो (race condition se bachav) ─────────
-    sheet.mark_running(row)
-    state.begin_run(row.row_index)
-
-    downloaded_files: list[Path] = []
-    drive_links: list[str] = []
+    state = None
+    sheet = None
+    drive = None
+    row = None
 
     try:
+        state   = StateManager()
+        sheet   = SheetReader()
+        drive   = DriveUploader()
+
+        # ── Step 1: Next pending row पढ़ो ─────────────────────────────────────────
+        logger.info("\n📋 STEP 1: Google Sheet से pending row dhundh rahe hain...")
+
+        row = sheet.get_next_pending_row()
+
+        if row is None:
+            logger.info("✅ Koi pending row nahi — pipeline band ho rahi hai.")
+            state.no_pending()
+            return 2   # Exit code 2 = no work to do (not an error)
+
+        logger.info(f"✅ Mili: Rows {row.row_indices} | Title: '{row.title}'")
+        logger.info(f"   Prompts: {len(row.get_prompts())}")
+
+        # ── Step 2: Row को "running" mark करो (race condition se bachav) ─────────
+        sheet.mark_running(row)
+        state.begin_run(row.row_index)
+
+        downloaded_files: list[Path] = []
+        drive_links: list[str] = []
+
         # ── Step 3: Browser agent चलाओ ─────────────────────────────────────
         logger.info(f"\n🌐 STEP 2: Browser agent start kar rahe hain...")
-        logger.info(f"   Row: {row.row_index} | Title: {row.title}")
+        logger.info(f"   Rows: {row.row_indices} | Title: {row.title}")
 
-        downloaded_file = run_google_vids_agent(row)
-
-        if not downloaded_file:
-            raise RuntimeError(f"Koi video download nahi hua for row {row.row_index}")
-
-        downloaded_files = [downloaded_file]
+        url = WEBSITE_URL.lower()
+        if "docs.google.com/videos" in url or "google.com/videos" in url or "vids" in url:
+            logger.info("🎬 Using Google Vids Agent")
+            downloaded_file = run_google_vids_agent(row)
+            if not downloaded_file:
+                raise RuntimeError(f"Koi video download nahi hua for rows {row.row_indices}")
+            downloaded_files = [downloaded_file]
+        else:
+            logger.info(f"🎬 Using Browser Agent for: {WEBSITE_URL}")
+            from agents.browser_agent import run_browser_agent
+            downloaded_files = run_browser_agent(row)
+            if not downloaded_files:
+                raise RuntimeError(f"Koi video download nahi hua for rows {row.row_indices}")
 
         logger.info(f"✅ {len(downloaded_files)} video(s) download hui:")
         for f in downloaded_files:
@@ -142,14 +157,24 @@ def run_pipeline() -> int:
 
     except Exception as e:
         logger.error(f"\n❌ PIPELINE ERROR: {e}", exc_info=True)
-        logger.info("📊 Sheet mein 'failed' mark kar rahe hain...")
-
-        sheet.mark_failed(row, str(e))
-        state.fail_run(row.row_index, str(e))
+        
+        if sheet is not None and row is not None:
+            logger.info("📊 Sheet mein 'failed' mark kar rahe hain...")
+            try:
+                sheet.mark_failed(row, str(e))
+            except Exception as sheet_err:
+                logger.error(f"Failed to mark sheet as failed: {sheet_err}")
+                
+        if state is not None and row is not None:
+            try:
+                state.fail_run(row.row_index, str(e))
+            except Exception as state_err:
+                logger.error(f"Failed to mark state as failed: {state_err}")
 
         logger.info("=" * 60)
         logger.info("  ❌ PIPELINE FAILED")
-        logger.info(f"  Row: {row.row_index} | Title: {row.title}")
+        if row is not None:
+            logger.info(f"  Rows: {row.row_indices} | Title: {row.title}")
         logger.info(f"  Error: {str(e)[:100]}")
         logger.info("=" * 60)
         return 1

@@ -9,6 +9,10 @@ import os
 import json
 import base64
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR        = Path(__file__).parent.parent
@@ -22,15 +26,19 @@ LOGS_DIR.mkdir(exist_ok=True)
 # ─── Google Sheets ─────────────────────────────────────────────────────────────
 SHEET_ID        = os.environ.get("SHEET_ID", "")          # Sheet URL का ID part
 SHEET_NAME      = os.environ.get("SHEET_NAME", "Sheet1")  # Tab name
-SHEET_RANGE     = os.environ.get("SHEET_RANGE", "A:F")    # पढ़ने का range
+SHEET_RANGE     = os.environ.get("SHEET_RANGE", "A:I")    # पढ़ने का range
 
 # Column mapping (0-indexed) — अपने sheet के अनुसार बदलें
-COL_TITLE       = int(os.environ.get("COL_TITLE",   "0"))  # Column A = Title
-COL_PROMPT1     = int(os.environ.get("COL_PROMPT1", "1"))  # Column B = Prompt 1
-COL_PROMPT2     = int(os.environ.get("COL_PROMPT2", "2"))  # Column C = Prompt 2
-COL_PROMPT3     = int(os.environ.get("COL_PROMPT3", "3"))  # Column D = Prompt 3
-COL_STATUS      = int(os.environ.get("COL_STATUS",  "4"))  # Column E = Status
-COL_DRIVE_LINK  = int(os.environ.get("COL_DRIVE_LINK", "5"))  # Column F = Drive Link
+COL_DAY         = int(os.environ.get("COL_DAY",         "0"))  # Column A = Day
+COL_CATEGORY    = int(os.environ.get("COL_CATEGORY",    "1"))  # Column B = Category
+COL_TITLE       = int(os.environ.get("COL_TITLE",       "2"))  # Column C = Title
+COL_TOPIC       = int(os.environ.get("COL_TOPIC",       "3"))  # Column D = Topic
+COL_SCENE       = int(os.environ.get("COL_SCENE",       "4"))  # Column E = Scene
+COL_SCENE_LABEL = int(os.environ.get("COL_SCENE_LABEL", "5"))  # Column F = Scene_Label
+COL_PROMPT      = int(os.environ.get("COL_PROMPT",      "6"))  # Column G = Prompt
+COL_STATUS      = int(os.environ.get("COL_STATUS",      "7"))  # Column H = Status
+COL_DRIVE_LINK  = int(os.environ.get("COL_DRIVE_LINK",  "8"))  # Column I = Video_File (Drive Link)
+
 
 STATUS_PENDING  = "pending"
 STATUS_RUNNING  = "running"

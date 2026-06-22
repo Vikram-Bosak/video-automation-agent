@@ -208,8 +208,11 @@ class BrowserAgent(ABC):
         """Safe fill — element visible होने पर text fill करो।"""
         try:
             await self._page.wait_for_selector(selector, state="visible", timeout=timeout)
-            await self._page.fill(selector, "")   # Clear first
-            await self._page.type(selector, text, delay=50)  # Human-like typing
+            await self._page.click(selector)
+            await self._page.press(selector, "Control+A")
+            await self._page.press(selector, "Delete")
+            await asyncio.sleep(0.2)
+            await self._page.type(selector, text, delay=0)
             return True
         except PlaywrightTimeout:
             logger.warning(f"Fill timeout: {selector}")

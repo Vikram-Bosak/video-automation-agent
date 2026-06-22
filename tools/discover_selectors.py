@@ -17,7 +17,9 @@ import os
 import sys
 from pathlib import Path
 
+sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
 
 from playwright.async_api import async_playwright
 
@@ -28,11 +30,14 @@ async def discover():
     print("=" * 50)
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=False,  # देखना है
-            slow_mo=500,
-            executable_path='/usr/bin/google-chrome'
-        )
+        executable_path = '/usr/bin/google-chrome' if os.name != 'nt' and os.path.exists('/usr/bin/google-chrome') else None
+        launch_opts = {
+            "headless": False,
+            "slow_mo": 500
+        }
+        if executable_path:
+            launch_opts["executable_path"] = executable_path
+        browser = await p.chromium.launch(**launch_opts)
 
         context_opts = {"viewport": {"width": 1366, "height": 768}}
         if COOKIES_FILE.exists():

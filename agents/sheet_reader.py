@@ -17,7 +17,8 @@ from googleapiclient.errors import HttpError
 
 from config.settings import (
     SHEET_ID, SHEET_NAME, SHEET_RANGE,
-    COL_TITLE, COL_PROMPT1, COL_PROMPT2, COL_PROMPT3,
+    COL_DAY, COL_CATEGORY, COL_TITLE, COL_TOPIC,
+    COL_SCENE, COL_SCENE_LABEL, COL_PROMPT,
     COL_STATUS, COL_DRIVE_LINK,
     STATUS_PENDING, STATUS_RUNNING, STATUS_DONE, STATUS_FAILED,
     get_google_credentials_dict,
@@ -33,12 +34,14 @@ SCOPES = [
 
 @dataclass
 class VideoRow:
-    """Google Sheet की एक row को represent करता है।"""
-    row_index: int          # Sheet में 1-indexed row number
+    """Google Sheet की एक grouped rows (1 day/video = 3 rows) को represent करता है।"""
+    row_indices: list[int]  # Sheet में 1-indexed row numbers (typically 3 rows)
+    row_index: int          # For backward compatibility (maps to row_indices[0])
     title: str              # Video का title (file name के लिए)
-    prompt1: str            # Prompt 1
-    prompt2: str            # Prompt 2
-    prompt3: str            # Prompt 3
+    day: str                # Day number
+    prompt1: str            # Prompt for Scene 1
+    prompt2: str            # Prompt for Scene 2
+    prompt3: str            # Prompt for Scene 3
     status: str = STATUS_PENDING
     drive_links: list[str] = field(default_factory=list)
 
@@ -50,13 +53,14 @@ class VideoRow:
     def get_safe_title(self) -> str:
         """File system के लिए safe title (special chars remove)।"""
         import re
+        # Remove characters that are not word characters, spaces, or hyphens
         safe = re.sub(r'[^\w\s-]', '', self.title)
         safe = re.sub(r'\s+', '_', safe.strip())
-        return safe or f"video_row_{self.row_index}"
+        return safe or f"video_day_{self.day or self.row_index}"
 
 
 class SheetReader:
-    """Google Sheets read/write operations।"""
+    """Google Sheets read/write operations (KidoBum grouped schema)।"""
 
     def __init__(self):
         creds_dict = get_google_credentials_dict()
@@ -71,66 +75,179 @@ class SheetReader:
 
     def get_next_pending_row(self) -> Optional[VideoRow]:
         """
-        Sheet में पहली "pending" status वाली row return करता है।
-        अगर कोई pending row नहीं है तो None return करता है।
+        Sheet में पहली "pending" status वाली row group (Day/Title) return करता है।
+        अगर कोई pending group नहीं है तो None return करता है।
         """
         rows = self._fetch_all_rows()
+        # Group consecutive rows by Day / Title
+        groups: dict[str, list[tuple[int, list]]] = {}
         for idx, row in enumerate(rows):
-            row_num = idx + 2  # Header row skip (1-indexed + header)
-            status = self._get_cell(row, COL_STATUS).strip().lower()
+            row_num = idx + 2  # Header row is row 1
+            day = self._get_cell(row, COL_DAY).strip()
+            title = self._get_cell(row, COL_TITLE).strip()
+            
+            if not title:
+                continue
+                
+            group_key = day if day else title
+            if group_key not in groups:
+                groups[group_key] = []
+            groups[group_key].append((row_num, row))
 
-            if status == STATUS_PENDING or status == "":
-                video_row = self._parse_row(row, row_num)
-                if not video_row.title:
-                    logger.debug(f"Row {row_num} — title empty, skip karenge")
-                    continue
+        # Check each group for pending status
+        for group_key, group_items in groups.items():
+            has_pending = False
+            for row_num, row_data in group_items:
+                status = self._get_cell(row_data, COL_STATUS).strip().lower()
+                # Empty status or "pending" or containing "failed" indicates it needs processing
+                if status == STATUS_PENDING or status == "" or "failed" in status:
+                    has_pending = True
+                    break
+            
+            if has_pending:
+                # Group found! Let's sort by Scene index
+                sorted_items = sorted(group_items, key=lambda x: self._get_scene_num(x[1]))
+                first_row_num, first_row = sorted_items[0]
+                
+                title = self._get_cell(first_row, COL_TITLE).strip()
+                day = self._get_cell(first_row, COL_DAY).strip()
+                
+                prompt1 = ""
+                prompt2 = ""
+                prompt3 = ""
+                row_indices = []
+                
+                for row_num, row_data in sorted_items:
+                    row_indices.append(row_num)
+                    scene_str = self._get_cell(row_data, COL_SCENE).strip()
+                    prompt_text = self._get_cell(row_data, COL_PROMPT).strip()
+                    
+                    if scene_str == "1":
+                        prompt1 = prompt_text
+                    elif scene_str == "2":
+                        prompt2 = prompt_text
+                    elif scene_str == "3":
+                        prompt3 = prompt_text
+                    else:
+                        # Fallback ordering
+                        if not prompt1:
+                            prompt1 = prompt_text
+                        elif not prompt2:
+                            prompt2 = prompt_text
+                        elif not prompt3:
+                            prompt3 = prompt_text
 
-                # Double-check: row abhi bhi pending hai? (race condition guard)
-                current_status = self._get_cell(row, COL_STATUS).strip().lower()
-                if current_status not in (STATUS_PENDING, ""):
-                    logger.info(f"Row {row_num} abhi '{current_status}' hai — skip karenge (another run picked it up)")
-                    continue
-
-                logger.info(f"📋 Pending row mili: Row {row_num} | Title: {video_row.title}")
+                # Double check race condition: ensure status is still pending/empty/failed
+                # (fetch latest status of first row just to be sure)
+                video_row = VideoRow(
+                    row_indices = row_indices,
+                    row_index = row_indices[0],
+                    title = title,
+                    day = day,
+                    prompt1 = prompt1,
+                    prompt2 = prompt2,
+                    prompt3 = prompt3,
+                    status = STATUS_PENDING
+                )
+                logger.info(f"📋 Pending row group found: Day {day} | Title: '{title}' | Rows: {row_indices}")
                 return video_row
 
-        logger.info("✅ Koi pending row nahi hai sheet mein")
+        logger.info("✅ Sheet mein koi pending group nahi hai")
         return None
 
     def get_all_rows(self) -> list[VideoRow]:
-        """सभी rows return करता है (testing के लिए)।"""
+        """सभी grouped rows return करता है (testing के लिए)।"""
         rows = self._fetch_all_rows()
-        result = []
+        groups: dict[str, list[tuple[int, list]]] = {}
         for idx, row in enumerate(rows):
             row_num = idx + 2
-            video_row = self._parse_row(row, row_num)
-            if video_row.title:
-                result.append(video_row)
+            day = self._get_cell(row, COL_DAY).strip()
+            title = self._get_cell(row, COL_TITLE).strip()
+            
+            if not title:
+                continue
+                
+            group_key = day if day else title
+            if group_key not in groups:
+                groups[group_key] = []
+            groups[group_key].append((row_num, row))
+
+        result = []
+        for group_key, group_items in groups.items():
+            sorted_items = sorted(group_items, key=lambda x: self._get_scene_num(x[1]))
+            first_row_num, first_row = sorted_items[0]
+            
+            title = self._get_cell(first_row, COL_TITLE).strip()
+            day = self._get_cell(first_row, COL_DAY).strip()
+            
+            prompt1 = ""
+            prompt2 = ""
+            prompt3 = ""
+            row_indices = []
+            
+            for row_num, row_data in sorted_items:
+                row_indices.append(row_num)
+                scene_str = self._get_cell(row_data, COL_SCENE).strip()
+                prompt_text = self._get_cell(row_data, COL_PROMPT).strip()
+                
+                if scene_str == "1":
+                    prompt1 = prompt_text
+                elif scene_str == "2":
+                    prompt2 = prompt_text
+                elif scene_str == "3":
+                    prompt3 = prompt_text
+                else:
+                    if not prompt1:
+                        prompt1 = prompt_text
+                    elif not prompt2:
+                        prompt2 = prompt_text
+                    elif not prompt3:
+                        prompt3 = prompt_text
+                        
+            video_row = VideoRow(
+                row_indices = row_indices,
+                row_index = row_indices[0],
+                title = title,
+                day = day,
+                prompt1 = prompt1,
+                prompt2 = prompt2,
+                prompt3 = prompt3,
+                status = self._get_cell(first_row, COL_STATUS).strip()
+            )
+            result.append(video_row)
         return result
 
     # ─── Write ────────────────────────────────────────────────────────────────
 
     def mark_running(self, row: VideoRow) -> None:
-        """Row को 'running' status दो — दूसरा run duplicate न करे।"""
-        self._update_cell(row.row_index, COL_STATUS, STATUS_RUNNING)
-        logger.info(f"🔄 Row {row.row_index} → status: running")
+        """Row group को 'running' status दो — दूसरा run duplicate न करे।"""
+        for r_idx in row.row_indices:
+            self._update_cell(r_idx, COL_STATUS, STATUS_RUNNING)
+        logger.info(f"🔄 Row group {row.row_indices} → status: running")
 
     def mark_done(self, row: VideoRow, drive_links: list[str]) -> None:
-        """Row को 'done' mark करो और Drive links save करो।"""
-        links_str = " | ".join(drive_links)
-        self._update_cell(row.row_index, COL_STATUS, STATUS_DONE)
-        self._update_cell(row.row_index, COL_DRIVE_LINK, links_str)
-        logger.info(f"✅ Row {row.row_index} → status: done | Links: {links_str}")
+        """Row group को 'done' mark करो और Drive links save करो।"""
+        for idx, r_idx in enumerate(row.row_indices):
+            self._update_cell(r_idx, COL_STATUS, STATUS_DONE)
+            # If there's 1 link, populate it for all scenes in the group (e.g. Google Vids combined mp4)
+            # If there are 3 links, populate corresponding link for each scene (e.g. Kling AI parts)
+            if len(drive_links) == 1:
+                self._update_cell(r_idx, COL_DRIVE_LINK, drive_links[0])
+            elif idx < len(drive_links):
+                self._update_cell(r_idx, COL_DRIVE_LINK, drive_links[idx])
+        logger.info(f"✅ Row group {row.row_indices} → status: done | Links: {drive_links}")
 
     def mark_failed(self, row: VideoRow, reason: str = "") -> None:
-        """Row को 'failed' mark करो।"""
-        self._update_cell(row.row_index, COL_STATUS, f"{STATUS_FAILED}: {reason[:100]}")
-        logger.error(f"❌ Row {row.row_index} → status: failed | Reason: {reason}")
+        """Row group को 'failed' mark करो।"""
+        for r_idx in row.row_indices:
+            self._update_cell(r_idx, COL_STATUS, f"{STATUS_FAILED}: {reason[:100]}")
+        logger.error(f"❌ Row group {row.row_indices} → status: failed | Reason: {reason}")
 
     def mark_pending(self, row: VideoRow) -> None:
-        """Row को वापस 'pending' करो (retry के लिए)।"""
-        self._update_cell(row.row_index, COL_STATUS, STATUS_PENDING)
-        logger.info(f"🔁 Row {row.row_index} → status: pending (retry)")
+        """Row group को वापस 'pending' करो (retry के लिए)।"""
+        for r_idx in row.row_indices:
+            self._update_cell(r_idx, COL_STATUS, STATUS_PENDING)
+        logger.info(f"🔁 Row group {row.row_indices} → status: pending (retry)")
 
     # ─── Private Helpers ──────────────────────────────────────────────────────
 
@@ -151,22 +268,19 @@ class SheetReader:
             logger.error(f"Sheets API error: {e}")
             raise
 
-    def _parse_row(self, row: list, row_num: int) -> VideoRow:
-        """Raw row list को VideoRow object में convert करता है।"""
-        return VideoRow(
-            row_index = row_num,
-            title     = self._get_cell(row, COL_TITLE),
-            prompt1   = self._get_cell(row, COL_PROMPT1),
-            prompt2   = self._get_cell(row, COL_PROMPT2),
-            prompt3   = self._get_cell(row, COL_PROMPT3),
-            status    = self._get_cell(row, COL_STATUS),
-        )
-
     def _get_cell(self, row: list, col_idx: int) -> str:
         """Row list से safe cell value निकालता है।"""
         if col_idx < len(row):
             return str(row[col_idx]).strip()
         return ""
+
+    def _get_scene_num(self, row: list) -> int:
+        """Scene column से integer scene value निकालता है (default to 0)।"""
+        scene_str = self._get_cell(row, COL_SCENE)
+        try:
+            return int(scene_str)
+        except ValueError:
+            return 0
 
     @retry_on_failure(max_attempts=3, delay_sec=2.0, retryable_exceptions=(HttpError, Exception))
     def _update_cell(self, row_num: int, col_idx: int, value: str) -> None:

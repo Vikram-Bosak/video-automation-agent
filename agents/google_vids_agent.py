@@ -74,7 +74,7 @@ class GoogleVidsAgent:
     SEL_PROMPT_TEXTAREA = 'textarea[placeholder*="8-second"], textarea[placeholder*="Describe"], .veo-prompt-input, [data-placeholder*="Describe"]'
 
     # "Generate" button in the panel
-    SEL_GENERATE_BTN    = 'button:has-text("Generate"), [aria-label*="Generate"]'
+    SEL_GENERATE_BTN    = 'button.videoGenCreationViewGenerateButton'
 
     # Generated video result / thumbnail
     SEL_CLIP_RESULT     = '.generated-clip, [class*="clip-result"], [class*="veo-result"], video'
@@ -213,8 +213,8 @@ class GoogleVidsAgent:
         import os
         google_email = os.environ.get("GOOGLE_ACCOUNT_EMAIL", "")
         
-        # Google Drive page खोलो (login check के लिए)
-        await self._page.goto("https://drive.google.com", wait_until="networkidle", timeout=30_000)
+        # Google Vids page खोलो (login check के लिए)
+        await self._page.goto(GOOGLE_VIDS_BASE, wait_until="networkidle", timeout=30_000)
         await self._human_delay(2, 3)
 
         current_url = self._page.url
@@ -271,6 +271,8 @@ class GoogleVidsAgent:
 
         # "Blank video" / "Create from scratch" पर click
         new_btn_selectors = [
+            '.docs-homescreen-templates-templateview',
+            '.docs-homescreen-fab',
             'button:has-text("Blank video")',
             'button:has-text("New video")',
             'a:has-text("Blank video")',
@@ -300,24 +302,50 @@ class GoogleVidsAgent:
         """
         AI Video Clip panel use करके एक 8-second clip generate करो।
         """
-        # Right panel में "AI video clip" / Veo section खोलो
-        veo_btn_selectors = [
-            '[aria-label*="AI video clip"]',
-            'button:has-text("AI video clip")',
-            '.veo-trigger',
-            # Sidebar icon (screenshot में "Veo" icon दिखा)
-            '[data-panel-id="veo"]',
-            'button[title*="Veo"]',
-        ]
+        # Check if the AI video clip panel is already open
+        panel_title_sel = '.appsDocsAiGenerativeaiVideoUiSidebarWizVideogensidebarSideSheetTitle, header:has-text("AI video clip")'
+        panel_already_open = False
+        try:
+            if await self._page.is_visible(panel_title_sel, timeout=1000):
+                panel_already_open = True
+                logger.info("✅ AI video clip panel is already open")
+        except Exception:
+            pass
 
-        panel_opened = False
-        for sel in veo_btn_selectors:
-            if await self._safe_click(sel, timeout=5_000):
-                panel_opened = True
-                logger.info(f"✅ AI video clip panel opened")
-                break
+        panel_opened = panel_already_open
+        if not panel_opened:
+            # Check if 'Getting started' modal dialog is visible and click the Veo card
+            modal_button_sel = '.appsDocsGettingStartedEntryPointSelectionViewButton.videogen, button:has-text("Veo 3.1")'
+            try:
+                if await self._page.is_visible(modal_button_sel, timeout=2000):
+                    logger.info("Getting started modal is open, clicking Veo 3.1 card...")
+                    await self._page.click(modal_button_sel)
+                    panel_opened = True
+            except Exception:
+                pass
 
         if not panel_opened:
+            # Fallback: try clicking side rail icon or other triggers
+            veo_btn_selectors = [
+                '[aria-label="Generate an AI video clip"]',
+                '[aria-label*="AI video clip"]',
+                'button:has-text("AI video clip")',
+                '.veo-trigger',
+                '[data-panel-id="veo"]',
+                'button[title*="Veo"]',
+            ]
+            for sel in veo_btn_selectors:
+                if await self._safe_click(sel, timeout=3000):
+                    panel_opened = True
+                    logger.info(f"✅ AI video clip panel opened via: {sel}")
+                    break
+
+        if panel_opened:
+            try:
+                await self._page.wait_for_selector(panel_title_sel, state="visible", timeout=10_000)
+            except Exception as e:
+                logger.warning(f"Panel title selector not found after opening attempts: {e}")
+        else:
             await self._take_screenshot(f"veo_panel_not_found_{clip_number}")
             logger.error("Veo panel nahi khula — selector verify karein")
             return False
@@ -477,24 +505,28 @@ class GoogleVidsAgent:
             await self._page.click(selector)
             return True
         except PlaywrightTimeout:
+            logger.warning(f"Click timeout for selector: {selector}")
             return False
         except Exception as e:
-            logger.debug(f"Click error ({selector}): {e}")
+            logger.warning(f"Click error ({selector}): {e}")
             return False
 
     async def _safe_fill(self, selector: str, text: str, timeout: int = 10_000) -> bool:
         try:
             await self._page.wait_for_selector(selector, state="visible", timeout=timeout)
             await self._page.click(selector)
-            await self._page.fill(selector, "")
-            await asyncio.sleep(0.3)
-            # Human-like typing
-            await self._page.type(selector, text, delay=30)
+            # Select all and delete (safe for contenteditable)
+            await self._page.press(selector, "Control+A")
+            await self._page.press(selector, "Delete")
+            await asyncio.sleep(0.2)
+            # Type instantly with no delay
+            await self._page.type(selector, text, delay=0)
             return True
         except PlaywrightTimeout:
+            logger.warning(f"Fill timeout for selector: {selector}")
             return False
         except Exception as e:
-            logger.debug(f"Fill error ({selector}): {e}")
+            logger.warning(f"Fill error ({selector}): {e}")
             return False
 
     async def _human_delay(self, min_sec: float = 1.0, max_sec: float = 3.0) -> None:
@@ -506,8 +538,9 @@ class GoogleVidsAgent:
         try:
             path = DOWNLOADS_DIR.parent / "logs" / f"{name}_{int(time.time())}.png"
             await self._page.screenshot(path=str(path), full_page=False)
-            logger.debug(f"📸 Screenshot: {path.name}")
-        except Exception:
+            logger.info(f"📸 Screenshot: {path.name}")
+        except Exception as e:
+            logger.warning(f"Screenshot error ({name}): {e}")
             pass
 
 
