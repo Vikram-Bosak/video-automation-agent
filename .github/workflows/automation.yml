@@ -71,6 +71,43 @@ jobs:
         run: |
           echo "${{ secrets.GOOGLE_COOKIES }}" | base64 -d > cookies.json
 
+      # ── Pre-flight Check ─────────────────────────────────────────────────
+      - name: 🔍 Pre-flight Diagnostic Check
+        run: |
+          echo "=== 🔍 PRE-FLIGHT DIAGNOSTIC ==="
+          echo ""
+          echo "--- Environment Variables ---"
+          echo "SHEET_ID length:        ${#SHEET_ID} chars"
+          echo "DRIVE_FOLDER_ID length: ${#DRIVE_FOLDER_ID} chars"
+          echo "GOOGLE_CREDENTIALS len: ${#GOOGLE_CREDENTIALS} chars"
+          echo "GOOGLE_COOKIES length:  ${#GOOGLE_COOKIES} chars"
+          echo "WEBSITE_URL:            $WEBSITE_URL"
+          echo "WEBSITE_EMAIL:          ${WEBSITE_EMAIL:0:5}***"
+          echo ""
+          echo "--- Python Config Validation ---"
+          python -c "
+          import os, sys
+          sys.path.insert(0, '.')
+          try:
+              from config.settings import validate_config
+              errors = validate_config()
+              if errors:
+                  print('❌ Config errors:')
+                  for e in errors:
+                      print(f'   - {e}')
+                  sys.exit(1)
+              else:
+                  print('✅ All config validated OK')
+          except Exception as e:
+              print(f'❌ Config validation failed: {e}')
+              sys.exit(1)
+          "
+          echo ""
+          echo "--- File Check ---"
+          ls -la cookies.json 2>/dev/null || echo "⚠️  cookies.json NOT FOUND"
+          echo ""
+          echo "=== DIAGNOSTIC COMPLETE ==="
+
       # ── Run Pipeline ──────────────────────────────────────────────────────
       - name: 🚀 Run Video Pipeline
         env:

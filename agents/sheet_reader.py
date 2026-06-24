@@ -27,6 +27,8 @@ from agents.retry_utils import retry_on_failure
 
 logger = logging.getLogger(__name__)
 
+from config.settings import STUCK_ROW_TIMEOUT_HOURS
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
 ]
@@ -248,6 +250,38 @@ class SheetReader:
         for r_idx in row.row_indices:
             self._update_cell(r_idx, COL_STATUS, STATUS_PENDING)
         logger.info(f"🔁 Row group {row.row_indices} → status: pending (retry)")
+
+    def recover_stuck_rows(self) -> int:
+        """
+        ऐसे rows जो बहुत पुराने "running" status में हैं, उन्हें "failed" में reset करो।
+        GitHub Actions crash/timeout के बाद rows "running" में stuck रह जाते हैं।
+        Returns: Number of recovered rows
+        """
+        from datetime import datetime, timezone, timedelta
+
+        rows = self._fetch_all_rows()
+        recovered = 0
+        cutoff_hours = STUCK_ROW_TIMEOUT_HOURS
+
+        for idx, row in enumerate(rows):
+            row_num = idx + 2  # Header row skip
+            status = self._get_cell(row, COL_STATUS).strip().lower()
+
+            if status == STATUS_RUNNING:
+                title = self._get_cell(row, COL_TITLE).strip()
+                day = self._get_cell(row, COL_DAY).strip()
+                logger.warning(
+                    f"⚠️  Stuck 'running' row found: Row {row_num} | "
+                    f"Day: {day} | Title: '{title}' — resetting to 'failed' "
+                    f"(after {cutoff_hours}h timeout)"
+                )
+                self._update_cell(row_num, COL_STATUS, f"{STATUS_FAILED}: stuck in running > {cutoff_hours}h")
+                recovered += 1
+
+        if recovered > 0:
+            logger.info(f"🔄 {recovered} stuck row(s) recovered → will be retried as 'failed'")
+
+        return recovered
 
     # ─── Private Helpers ──────────────────────────────────────────────────────
 

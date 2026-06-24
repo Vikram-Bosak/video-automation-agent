@@ -213,6 +213,22 @@ class GoogleVidsAgent:
         import os
         google_email = os.environ.get("GOOGLE_ACCOUNT_EMAIL", "")
         
+        # ── Cookie validation ────────────────────────────────────────────────
+        if COOKIES_FILE.exists():
+            try:
+                import json
+                cookie_data = json.loads(COOKIES_FILE.read_text())
+                cookie_count = len(cookie_data.get("cookies", []))
+                if cookie_count == 0:
+                    logger.warning("⚠️  cookies.json exists but has 0 cookies — login required")
+                    await self._take_screenshot("empty_cookies")
+                else:
+                    logger.info(f"🍪 cookies.json loaded ({cookie_count} cookies)")
+            except Exception as e:
+                logger.warning(f"⚠️  cookies.json corrupted: {e} — login required")
+        else:
+            logger.warning("⚠️  No cookies.json found — login required")
+        
         # Google Vids page खोलो (login check के लिए)
         await self._page.goto(GOOGLE_VIDS_BASE, wait_until="networkidle", timeout=30_000)
         await self._human_delay(2, 3)
