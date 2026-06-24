@@ -93,6 +93,12 @@ BROWSER_SLOW_MO  = int(os.environ.get("BROWSER_SLOW_MO", "100"))
 # Video generation timeout (seconds)
 VIDEO_GEN_TIMEOUT_SEC = int(os.environ.get("VIDEO_GEN_TIMEOUT_SEC", "600"))  # 10 minutes max
 
+# ─── Video Output Settings ────────────────────────────────────────────────────
+VIDEO_DURATION_SEC  = int(os.environ.get("VIDEO_DURATION_SEC", "24"))  # Total video length (seconds)
+VIDEO_ASPECT_RATIO  = os.environ.get("VIDEO_ASPECT_RATIO", "9:16")    # Portrait for shorts/reels
+VIDEO_POLL_INTERVAL_SEC = int(os.environ.get("VIDEO_POLL_INTERVAL_SEC", "10"))
+VIDEO_MAX_WAIT_SEC      = int(os.environ.get("VIDEO_MAX_WAIT_SEC", "600"))
+
 # ─── Schedule ─────────────────────────────────────────────────────────────────
 MAX_VIDEOS_PER_RUN    = int(os.environ.get("MAX_VIDEOS_PER_RUN", "3"))
 PROMPTS_PER_VIDEO     = int(os.environ.get("PROMPTS_PER_VIDEO", "3"))

@@ -1,17 +1,17 @@
-name: 🎬 Video Automation Pipeline
+name: 🎬 Video Automation Pipeline (FREE)
 
 on:
   schedule:
-    # हर 2 घंटे में run (UTC time — IST = UTC+5:30)
-    # IST 00:00 = UTC 18:30 → cron: '30 18 * * *'
-    # Pattern: हर 2 घंटे मतलब UTC: 0:30, 2:30, 4:30, 6:30, 8:30, 10:30, 12:30, 14:30, 16:30, 18:30, 20:30, 22:30
-    - cron: '30 */2 * * *'
+    # Har 4 ghante mein run
+    # IST 00:00 = UTC 18:30
+    # Pattern: UTC 2:30, 6:30, 10:30, 14:30, 18:30, 22:30
+    - cron: '30 2,6,10,14,18,22 * * *'
 
-  # Manual trigger (testing के लिए)
+  # Manual trigger (testing ke liye)
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Dry run (Sheet check karo, browser mat chalao)'
+        description: 'Dry run (Sheet check karo, video mat banao)'
         required: false
         default: 'false'
         type: boolean
@@ -20,15 +20,12 @@ env:
   PYTHON_VERSION: '3.11'
 
 jobs:
-  # ──────────────────────────────────────────────────────────────────────────
   generate-video:
-  # ──────────────────────────────────────────────────────────────────────────
     name: 🎬 Generate & Upload Video
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90      # Video generation में time लगता है (max 1.5 hours)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30      # 30 min enough (no browser, just API + FFmpeg)
 
     steps:
-
       # ── Checkout ─────────────────────────────────────────────────────────
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
@@ -40,71 +37,70 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
-      # ── Dependencies ──────────────────────────────────────────────────────
-      - name: 📦 Install Python Dependencies
+      # ── Dependencies (LIGHTWEIGHT — no Playwright!) ───────────────────────
+      - name: 📦 Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ── Playwright Browsers ───────────────────────────────────────────────
-      - name: 🌐 Install Playwright + Chromium
+      # ── FFmpeg check ─────────────────────────────────────────────────────
+      - name: 🎞️ Check FFmpeg
         run: |
-          playwright install chromium --with-deps
+          ffmpeg -version | head -1
+          echo "✅ FFmpeg ready"
 
       # ── Directories ───────────────────────────────────────────────────────
-      - name: 📁 Create Required Directories
+      - name: 📁 Create Directories
         run: mkdir -p downloads logs
 
-      # ── Restore State (across runs persist karne ke liye) ─────────────────
+      # ── Restore State ────────────────────────────────────────────────────
       - name: 💾 Restore State Cache
         uses: actions/cache@v4
         with:
-          path: |
-            state.json
-            cookies.json
+          path: state.json
           key: pipeline-state-${{ github.ref_name }}
-          restore-keys: |
-            pipeline-state-
+          restore-keys: pipeline-state-
 
-      # ── Inject Cookies ────────────────────────────────────────────────────
+      # ── Inject Google Cookies (for Drive upload auth) ────────────────────
       - name: 🍪 Inject Google Cookies
         run: |
-          echo "${{ secrets.GOOGLE_COOKIES }}" | base64 -d > cookies.json
+          if [ -n "${{ secrets.GOOGLE_COOKIES }}" ]; then
+            echo "${{ secrets.GOOGLE_COOKIES }}" | base64 -d > cookies.json
+            echo "✅ Cookies injected"
+          else
+            echo "⚠️  No GOOGLE_COOKIES secret — Drive upload may fail"
+          fi
 
-      # ── Pre-flight Check ─────────────────────────────────────────────────
-      - name: 🔍 Pre-flight Diagnostic Check
+      # ── Pre-flight Diagnostic ────────────────────────────────────────────
+      - name: 🔍 Pre-flight Check
         run: |
           echo "=== 🔍 PRE-FLIGHT DIAGNOSTIC ==="
           echo ""
-          echo "--- Environment Variables ---"
-          echo "SHEET_ID length:        ${#SHEET_ID} chars"
-          echo "DRIVE_FOLDER_ID length: ${#DRIVE_FOLDER_ID} chars"
-          echo "GOOGLE_CREDENTIALS len: ${#GOOGLE_CREDENTIALS} chars"
-          echo "GOOGLE_COOKIES length:  ${#GOOGLE_COOKIES} chars"
-          echo "WEBSITE_URL:            $WEBSITE_URL"
-          echo "WEBSITE_EMAIL:          ${WEBSITE_EMAIL:0:5}***"
+          echo "--- Secrets ---"
+          echo "GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS && '✅ SET' || '❌ NOT SET' }}"
+          echo "SHEET_ID:           ${{ secrets.SHEET_ID && '✅ SET' || '❌ NOT SET' }}"
+          echo "DRIVE_FOLDER_ID:    ${{ secrets.DRIVE_FOLDER_ID && '✅ SET' || '❌ NOT SET' }}"
+          echo "WEBSITE_URL:        ${{ secrets.WEBSITE_URL || 'N/A (not needed for free)' }}"
           echo ""
-          echo "--- Python Config Validation ---"
+          echo "--- Python Config ---"
           python -c "
-          import os, sys
+          import sys
           sys.path.insert(0, '.')
           try:
               from config.settings import validate_config
               errors = validate_config()
               if errors:
-                  print('❌ Config errors:')
+                  print('⚠️  Issues:')
                   for e in errors:
                       print(f'   - {e}')
-                  sys.exit(1)
               else:
-                  print('✅ All config validated OK')
+                  print('✅ All config OK')
           except Exception as e:
-              print(f'❌ Config validation failed: {e}')
-              sys.exit(1)
+              print(f'❌ Config error: {e}')
           "
           echo ""
-          echo "--- File Check ---"
-          ls -la cookies.json 2>/dev/null || echo "⚠️  cookies.json NOT FOUND"
+          echo "--- FFmpeg ---"
+          ffmpeg -version 2>&1 | head -1
           echo ""
           echo "=== DIAGNOSTIC COMPLETE ==="
 
@@ -115,14 +111,10 @@ jobs:
           SHEET_ID:           ${{ secrets.SHEET_ID }}
           SHEET_NAME:         ${{ secrets.SHEET_NAME }}
           DRIVE_FOLDER_ID:    ${{ secrets.DRIVE_FOLDER_ID }}
-          WEBSITE_URL:        ${{ secrets.WEBSITE_URL }}
-          WEBSITE_EMAIL:      ${{ secrets.WEBSITE_EMAIL }}
-          WEBSITE_PASSWORD:   ${{ secrets.WEBSITE_PASSWORD }}
-          BROWSER_HEADLESS:   'true'
           LOG_LEVEL:          'INFO'
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "🔍 DRY RUN MODE — only checking Sheet"
+            echo "🔍 DRY RUN — only checking Sheet"
             python tools/dry_run.py
           else
             python main.py
@@ -130,32 +122,20 @@ jobs:
 
       # ── Save State ────────────────────────────────────────────────────────
       - name: 💾 Save State Cache
-        if: always()   # Success या failure — दोनों में save करो
+        if: always()
         uses: actions/cache@v4
         with:
-          path: |
-            state.json
-            cookies.json
+          path: state.json
           key: pipeline-state-${{ github.ref_name }}-${{ github.run_number }}
 
-      # ── Upload Logs (always, even on failure) ─────────────────────────────
-      - name: 📋 Upload Run Logs
+      # ── Upload Logs ───────────────────────────────────────────────────────
+      - name: 📋 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: logs-run-${{ github.run_number }}
           path: logs/
-          retention-days: 14
-
-      # ── Upload Screenshots (failure debug) ───────────────────────────────
-      - name: 📸 Upload Screenshots (Debug)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-screenshots-${{ github.run_number }}
-          path: logs/*.png
           retention-days: 7
-          if-no-files-found: ignore
 
       # ── Summary ───────────────────────────────────────────────────────────
       - name: 📊 Job Summary
@@ -166,6 +146,6 @@ jobs:
           echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Run Number | ${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Triggered By | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Method | **FREE** (Pollinations.ai + FFmpeg) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cost | ₹0 |" >> $GITHUB_STEP_SUMMARY
           echo "| Time (UTC) | $(date -u) |" >> $GITHUB_STEP_SUMMARY
