@@ -1,166 +1,354 @@
 """
 agents/video_generator.py
 ──────────────────────────
-FREE video generation — NO API key, NO billing, NO browser needed.
+Google Vids (Veo 3.1) automation via Playwright.
 
-Approach:
-  1. 3 prompts se free images generate karo (Pollinations.ai)
-  2. Images ko FFmpeg se short video mein convert karo
-  3. Final MP4 export → Google Drive upload
+Based on actual UI screenshot analysis:
+- Right sidebar: AI Video Clip panel
+- Textarea: "Describe your video..."
+- Model: Veo 3.1
+- Format: Portrait (9:16)
+- Timeline at bottom: clips + duration
+- Download: File → Download → MP4
 
-Cost: ₹0 | Time: ~45 seconds | Quality: Professional short-form video
+Flow:
+  1. Google Vids khole
+  2. Naya project banao
+  3. Har prompt se 8s clip generate karo
+  4. Sab clips timeline mein add ho jayenge
+  5. Final 24s video download karo
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-import urllib.request
-import urllib.parse
-import subprocess
-import random
+import shutil
+import os
 from pathlib import Path
 from typing import Optional
 
-from config.settings import DOWNLOADS_DIR, VIDEO_DURATION_SEC
+from playwright.async_api import (
+    async_playwright,
+    Browser,
+    BrowserContext,
+    Page,
+    Download,
+    TimeoutError as PlaywrightTimeout,
+)
+
+from config.settings import (
+    DOWNLOADS_DIR,
+    BROWSER_HEADLESS,
+    BROWSER_SLOW_MO,
+    VIDEO_GEN_TIMEOUT_SEC,
+)
 
 logger = logging.getLogger(__name__)
 
-# ─── Config ───────────────────────────────────────────────────────────────────
-IMAGE_API = "https://image.pollinations.ai/prompt"
-IMG_W, IMG_H = 720, 1280  # 9:16 portrait
-IMG_TIMEOUT = 60
+COOKIES_FILE = Path("cookies.json")
+GOOGLE_VIDS_URL = "https://docs.google.com/videos"
 
 
 class VideoGenerator:
     """
-    FREE video generation: Pollinations.ai (images) + FFmpeg (video).
-    No API key, no billing, no browser automation.
+    Google Vids automation — Veo 3.1 se FREE video generation.
     """
 
+    def __init__(self):
+        self._pw = None
+        self._browser: Optional[Browser] = None
+        self._ctx: Optional[BrowserContext] = None
+        self._page: Optional[Page] = None
+
     def generate_video(self, prompts: list[str], title: str = "") -> Optional[Path]:
-        """3 prompts → images → animated MP4 video."""
+        return asyncio.run(self._run(prompts, title))
+
+    async def _run(self, prompts: list[str], title: str = "") -> Optional[Path]:
         if not prompts:
             logger.error("❌ No prompts!")
             return None
 
-        safe_title = self._safe_filename(title) or "video"
-        logger.info(f"🎬 Generating: '{title}' | {len(prompts)} scenes")
+        safe = self._safe_name(title) or "video"
+        logger.info(f"🎬 Google Vids: '{title}' | {len(prompts)} clips")
 
         try:
-            # ── Step 1: Generate images (FREE) ───────────────────────────
-            images = []
-            for i, prompt in enumerate(prompts, 1):
-                if not prompt.strip():
+            await self._start_browser()
+            await self._login()
+            await self._new_project()
+            await self._delay(3, 5)
+
+            for i, p in enumerate(prompts, 1):
+                if not p.strip():
                     continue
-                img = self._gen_image(prompt.strip(), i)
-                if img:
-                    images.append(img)
+                logger.info(f"\n🎥 Clip {i}/{len(prompts)}: {p[:80]}...")
+                ok = await self._gen_clip(p.strip(), i)
+                if not ok:
+                    logger.warning(f"   ⚠️  Clip {i} failed")
+                await self._delay(2, 4)
 
-            if not images:
-                logger.error("❌ No images generated!")
-                return None
+            out = DOWNLOADS_DIR / f"{safe}.mp4"
+            result = await self._download(out)
 
-            logger.info(f"✅ {len(images)} images ready")
-
-            # ── Step 2: Create video with FFmpeg ─────────────────────────
-            out = DOWNLOADS_DIR / f"{safe_title}.mp4"
-
-            if not self._make_video(images, out):
-                return None
-
-            mb = out.stat().st_size / (1024 * 1024)
-            logger.info(f"✅ Video: {out.name} ({mb:.1f} MB)")
-            return out
+            if result:
+                mb = result.stat().st_size / (1024 * 1024)
+                logger.info(f"\n✅ Video: {result.name} ({mb:.1f} MB)")
+            return result
 
         except Exception as e:
-            logger.error(f"❌ Failed: {e}", exc_info=True)
+            logger.error(f"❌ {e}", exc_info=True)
             return None
+        finally:
+            await self._stop()
 
-    def _gen_image(self, prompt: str, n: int) -> Optional[Path]:
-        """Pollinations.ai se FREE image download karo."""
-        enc = urllib.parse.quote(prompt)
-        seed = random.randint(1, 999999)
-        url = f"{IMAGE_API}/{enc}?width={IMG_W}&height={IMG_H}&nologo=true&seed={seed}"
+    # ─── Browser ──────────────────────────────────────────────────────────
 
-        out = DOWNLOADS_DIR / f"scene_{n}_{int(time.time())}.png"
+    async def _start_browser(self):
+        self._pw = await async_playwright().start()
+        self._browser = await self._pw.chromium.launch(
+            headless=BROWSER_HEADLESS,
+            slow_mo=BROWSER_SLOW_MO,
+            args=["--no-sandbox", "--disable-dev-shm-usage",
+                   "--disable-blink-features=AutomationControlled"],
+        )
+        opts = {
+            "viewport": {"width": 1366, "height": 768},
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36",
+            "accept_downloads": True,
+        }
+        if COOKIES_FILE.exists():
+            opts["storage_state"] = str(COOKIES_FILE)
+            logger.info("🍪 Cookies loaded")
+        self._ctx = await self._browser.new_context(**opts)
+        self._page = await self._ctx.new_page()
+        logger.info(f"✅ Browser ready | Headless: {BROWSER_HEADLESS}")
+
+    async def _stop(self):
         try:
-            t0 = time.time()
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=IMG_TIMEOUT) as r:
-                data = r.read()
+            if self._ctx:
+                await self._ctx.storage_state(path=str(COOKIES_FILE))
+            if self._browser:
+                await self._browser.close()
+            if self._pw:
+                await self._pw.stop()
+        except Exception:
+            pass
 
-            if len(data) < 1000:
-                logger.error(f"  ❌ Scene {n}: Bad response ({len(data)}B)")
-                return None
+    # ─── Login ─────────────────────────────────────────────────────────────
 
-            out.write_bytes(data)
-            kb = len(data) / 1024
-            logger.info(f"  ✅ Scene {n}: {kb:.0f} KB ({int(time.time()-t0)}s)")
-            return out
+    async def _login(self):
+        await self._page.goto(GOOGLE_VIDS_URL, wait_until="networkidle", timeout=30_000)
+        await self._delay(2, 3)
+        url = self._page.url
+        logger.info(f"📍 {url}")
 
-        except Exception as e:
-            logger.error(f"  ❌ Scene {n}: {e}")
-            return None
+        if "accounts.google.com" in url or "signin" in url.lower():
+            email = os.environ.get("GOOGLE_ACCOUNT_EMAIL", "")
+            pw = os.environ.get("GOOGLE_ACCOUNT_PASSWORD", "")
+            if email and pw:
+                logger.info(f"🔐 Login: {email[:5]}***")
+                await self._page.goto("https://accounts.google.com/signin", wait_until="networkidle")
+                await self._fill('input[type="email"]', email)
+                await self._click('#identifierNext button, button:has-text("Next")')
+                await self._delay(2, 3)
+                await self._fill('input[type="password"]', pw)
+                await self._click('#passwordNext button, button:has-text("Next")')
+                await self._delay(3, 5)
+                logger.info("✅ Logged in")
+            else:
+                raise RuntimeError("Login required! cookies.json ya credentials set karo.")
+        else:
+            logger.info("✅ Already logged in")
 
-    def _make_video(self, images: list[Path], out: Path) -> bool:
-        """
-        FFmpeg se images se video banao.
-        Simple scale → pad → concat — fast and reliable.
-        """
-        n = len(images)
-        dur = VIDEO_DURATION_SEC / n
-        fps = 24
+    # ─── Project ───────────────────────────────────────────────────────────
 
-        inputs = []
-        filters = []
+    async def _new_project(self):
+        logger.info("📹 Creating project...")
+        await self._page.goto(GOOGLE_VIDS_URL, wait_until="networkidle", timeout=30_000)
+        await self._delay(2, 3)
 
-        for i, img in enumerate(images):
-            inputs += ["-loop", "1", "-t", str(dur), "-i", str(img)]
-            # Scale to exact size, pad if needed, set fps
-            filters.append(
-                f"[{i}:v]scale={IMG_W}:{IMG_H}:force_original_aspect_ratio=decrease,"
-                f"pad={IMG_W}:{IMG_H}:(ow-iw)/2:(oh-ih)/2:black,"
-                f"setsar=1,fps={fps},format=yuv420p[v{i}]"
-            )
+        # Click "Blank video" / "Create"
+        for sel in [
+            'button:has-text("Blank video")',
+            'button:has-text("New video")',
+            '[aria-label*="Blank video"]',
+            '[aria-label*="New video"]',
+            '.docs-homescreen-fab',
+            'button:has-text("Create")',
+        ]:
+            if await self._click(sel, timeout=5000):
+                logger.info(f"✅ Clicked: {sel}")
+                break
+        else:
+            raise RuntimeError("Create button nahi mila!")
 
-        concat_in = "".join(f"[v{i}]" for i in range(n))
-        filters.append(f"{concat_in}concat=n={n}:v=1:a=0[outv]")
+        await self._page.wait_for_url("**/videos/d/**", timeout=30_000)
+        await self._delay(3, 5)
+        logger.info("✅ Project created")
 
-        cmd = [
-            "ffmpeg", "-y",
-            *inputs,
-            "-filter_complex", ";".join(filters),
-            "-map", "[outv]",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "26",
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-            str(out),
-        ]
+    # ─── Clip Generation ───────────────────────────────────────────────────
 
-        logger.info(f"  🎞️  FFmpeg: {VIDEO_DURATION_SEC}s video from {n} scenes...")
+    async def _gen_clip(self, prompt: str, num: int) -> bool:
+        # AI panel open karo (right sidebar Veo icon)
+        if not await self._open_panel():
+            return False
+        await self._delay(1, 2)
 
+        # Prompt type karo — textarea "Describe your video..."
+        filled = await self._fill(
+            'textarea[placeholder*="Describe"], textarea[placeholder*="8-second"], '
+            '[data-placeholder*="Describe"], textarea',
+            prompt, timeout=10_000
+        )
+        if not filled:
+            await self._shot(f"prompt_fail_{num}")
+            return False
+        await self._shot(f"prompt_{num}")
+
+        # Generate button click
+        clicked = await self._click(
+            'button:has-text("Generate"), button.videoGenCreationViewGenerateButton',
+            timeout=10_000
+        )
+        if not clicked:
+            await self._shot(f"gen_fail_{num}")
+            return False
+
+        logger.info(f"   ⏳ Generating... (max {VIDEO_GEN_TIMEOUT_SEC}s)")
+
+        # Wait for clip ready
+        ready = await self._wait_ready(num)
+        if not ready:
+            return False
+
+        # Add to timeline
+        await self._delay(1, 2)
+        for sel in [
+            'button:has-text("Add to video")',
+            'button:has-text("Insert")',
+            'button:has-text("Add")',
+            '[aria-label*="Add to timeline"]',
+        ]:
+            if await self._click(sel, timeout=5_000):
+                logger.info(f"   ✅ Clip {num} added")
+                break
+
+        await self._delay(2, 3)
+        return True
+
+    async def _open_panel(self) -> bool:
+        # Check if already open
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            if r.returncode != 0:
-                logger.error(f"  ❌ FFmpeg: {r.stderr[-300:]}")
-                return False
-            logger.info(f"  ✅ Video created!")
+            if await self._page.is_visible('textarea[placeholder*="Describe"]', timeout=2000):
+                return True
+        except Exception:
+            pass
+
+        # Click Veo/AI icon in sidebar
+        for sel in [
+            '[aria-label="Generate an AI video clip"]',
+            '[aria-label*="AI video clip"]',
+            'button:has-text("AI video clip")',
+            '[data-panel-id="veo"]',
+            'button[title*="Veo"]',
+        ]:
+            if await self._click(sel, timeout=3000):
+                await self._delay(1, 2)
+                return True
+
+        await self._shot("panel_fail")
+        return False
+
+    async def _wait_ready(self, num: int) -> bool:
+        start = time.time()
+        while time.time() - start < VIDEO_GEN_TIMEOUT_SEC:
+            elapsed = int(time.time() - start)
+            for sel in [
+                'button:has-text("Add to video")',
+                'button:has-text("Insert")',
+                '.generated-clip',
+            ]:
+                try:
+                    if await self._page.is_visible(sel, timeout=3000):
+                        logger.info(f"   🎉 Clip {num} ready! ({elapsed}s)")
+                        await self._shot(f"ready_{num}")
+                        return True
+                except Exception:
+                    pass
+            if elapsed % 15 == 0:
+                logger.info(f"   ⏳ {elapsed}s...")
+            await asyncio.sleep(5)
+
+        logger.error(f"Clip {num} timeout!")
+        return False
+
+    # ─── Download ──────────────────────────────────────────────────────────
+
+    async def _download(self, out: Path) -> Optional[Path]:
+        logger.info("📥 Downloading...")
+        for seq in [
+            [('button:has-text("Download")', 5000)],
+            [('button[aria-label="File"], button:has-text("File")', 5000),
+             ('li:has-text("Download"), button:has-text("Download")', 5000)],
+        ]:
+            try:
+                async with self._page.expect_download(timeout=300_000) as dl:
+                    for sel, t in seq[:-1]:
+                        await self._click(sel, t)
+                        await self._delay(0.5, 1)
+                    await self._click(seq[-1][0], seq[-1][1])
+                d: Download = await dl.value
+                dest = out.parent / d.suggested_filename
+                await d.save_as(str(dest))
+                if dest != out:
+                    shutil.move(str(dest), str(out))
+                logger.info(f"✅ Downloaded: {out.name}")
+                return out
+            except Exception:
+                continue
+        return None
+
+    # ─── Helpers ───────────────────────────────────────────────────────────
+
+    async def _click(self, sel: str, timeout: int = 10000) -> bool:
+        try:
+            await self._page.wait_for_selector(sel, state="visible", timeout=timeout)
+            await self._page.click(sel)
             return True
-        except subprocess.TimeoutExpired:
-            logger.error("  ❌ FFmpeg timeout")
+        except Exception:
             return False
-        except FileNotFoundError:
-            logger.error("  ❌ FFmpeg not found!")
+
+    async def _fill(self, sel: str, text: str, timeout: int = 10000) -> bool:
+        try:
+            await self._page.wait_for_selector(sel, state="visible", timeout=timeout)
+            await self._page.click(sel)
+            await self._page.press(sel, "Control+A")
+            await self._page.press(sel, "Delete")
+            await asyncio.sleep(0.2)
+            await self._page.type(sel, text, delay=0)
+            return True
+        except Exception:
             return False
+
+    async def _delay(self, mn: float = 1, mx: float = 3):
+        import random
+        await asyncio.sleep(random.uniform(mn, mx))
+
+    async def _shot(self, name: str):
+        try:
+            p = DOWNLOADS_DIR.parent / "logs" / f"{name}_{int(time.time())}.png"
+            await self._page.screenshot(path=str(p), full_page=False)
+        except Exception:
+            pass
 
     @staticmethod
-    def _safe_filename(name: str) -> str:
+    def _safe_name(s: str) -> str:
         import re
-        if not name:
+        if not s:
             return ""
-        return re.sub(r'\s+', '_', re.sub(r'[^\w\s-]', '', name).strip())[:80]
+        return re.sub(r'\s+', '_', re.sub(r'[^\w\s-]', '', s).strip())[:80]
 
 
 def generate_video(prompts: list[str], title: str = "") -> Optional[Path]:
-    """FREE video — single function call."""
     return VideoGenerator().generate_video(prompts, title)

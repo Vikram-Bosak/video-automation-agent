@@ -1,17 +1,14 @@
-name: 🎬 Video Automation Pipeline (FREE)
+name: 🎬 Google Vids Automation
 
 on:
   schedule:
-    # Har 4 ghante mein run
-    # IST 00:00 = UTC 18:30
-    # Pattern: UTC 2:30, 6:30, 10:30, 14:30, 18:30, 22:30
-    - cron: '30 2,6,10,14,18,22 * * *'
+    # Har 4 ghante — 6 videos per day
+    - cron: '0 0,4,8,12,16,20 * * *'
 
-  # Manual trigger (testing ke liye)
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Dry run (Sheet check karo, video mat banao)'
+        description: 'Dry run'
         required: false
         default: 'false'
         type: boolean
@@ -21,131 +18,114 @@ env:
 
 jobs:
   generate-video:
-    name: 🎬 Generate & Upload Video
+    name: 🎬 Generate Video (Google Vids + Veo 3.1)
     runs-on: ubuntu-latest
-    timeout-minutes: 30      # 30 min enough (no browser, just API + FFmpeg)
+    timeout-minutes: 60
 
     steps:
-      # ── Checkout ─────────────────────────────────────────────────────────
-      - name: 📥 Checkout Repository
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      # ── Python Setup ──────────────────────────────────────────────────────
-      - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
-      # ── Dependencies (LIGHTWEIGHT — no Playwright!) ───────────────────────
       - name: 📦 Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ── FFmpeg check ─────────────────────────────────────────────────────
-      - name: 🎞️ Check FFmpeg
-        run: |
-          ffmpeg -version | head -1
-          echo "✅ FFmpeg ready"
+      - name: 🌐 Install Playwright
+        run: playwright install chromium --with-deps
 
-      # ── Directories ───────────────────────────────────────────────────────
       - name: 📁 Create Directories
         run: mkdir -p downloads logs
 
-      # ── Restore State ────────────────────────────────────────────────────
-      - name: 💾 Restore State Cache
+      - name: 💾 Restore State
         uses: actions/cache@v4
         with:
           path: state.json
           key: pipeline-state-${{ github.ref_name }}
           restore-keys: pipeline-state-
 
-      # ── Inject Google Cookies (for Drive upload auth) ────────────────────
-      - name: 🍪 Inject Google Cookies
+      - name: 🍪 Inject Cookies
         run: |
           if [ -n "${{ secrets.GOOGLE_COOKIES }}" ]; then
             echo "${{ secrets.GOOGLE_COOKIES }}" | base64 -d > cookies.json
             echo "✅ Cookies injected"
           else
-            echo "⚠️  No GOOGLE_COOKIES secret — Drive upload may fail"
+            echo "⚠️  No cookies — manual login needed"
           fi
 
-      # ── Pre-flight Diagnostic ────────────────────────────────────────────
       - name: 🔍 Pre-flight Check
         run: |
-          echo "=== 🔍 PRE-FLIGHT DIAGNOSTIC ==="
-          echo ""
-          echo "--- Secrets ---"
-          echo "GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS && '✅ SET' || '❌ NOT SET' }}"
-          echo "SHEET_ID:           ${{ secrets.SHEET_ID && '✅ SET' || '❌ NOT SET' }}"
-          echo "DRIVE_FOLDER_ID:    ${{ secrets.DRIVE_FOLDER_ID && '✅ SET' || '❌ NOT SET' }}"
-          echo "WEBSITE_URL:        ${{ secrets.WEBSITE_URL || 'N/A (not needed for free)' }}"
-          echo ""
-          echo "--- Python Config ---"
+          echo "=== PRE-FLIGHT ==="
+          echo "GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS && 'SET' || 'NOT SET' }}"
+          echo "SHEET_ID: ${{ secrets.SHEET_ID && 'SET' || 'NOT SET' }}"
+          echo "DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID && 'SET' || 'NOT SET' }}"
+          echo "GOOGLE_COOKIES: ${{ secrets.GOOGLE_COOKIES && 'SET' || 'NOT SET' }}"
           python -c "
-          import sys
-          sys.path.insert(0, '.')
+          import sys; sys.path.insert(0, '.')
           try:
               from config.settings import validate_config
               errors = validate_config()
               if errors:
-                  print('⚠️  Issues:')
-                  for e in errors:
-                      print(f'   - {e}')
+                  for e in errors: print(f'  - {e}')
               else:
-                  print('✅ All config OK')
+                  print('✅ Config OK')
           except Exception as e:
-              print(f'❌ Config error: {e}')
+              print(f'❌ {e}')
           "
-          echo ""
-          echo "--- FFmpeg ---"
-          ffmpeg -version 2>&1 | head -1
-          echo ""
-          echo "=== DIAGNOSTIC COMPLETE ==="
 
-      # ── Run Pipeline ──────────────────────────────────────────────────────
-      - name: 🚀 Run Video Pipeline
+      - name: 🚀 Run Pipeline
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID:           ${{ secrets.SHEET_ID }}
           SHEET_NAME:         ${{ secrets.SHEET_NAME }}
           DRIVE_FOLDER_ID:    ${{ secrets.DRIVE_FOLDER_ID }}
+          GOOGLE_PROJECT_ID:  ${{ secrets.GOOGLE_PROJECT_ID }}
           LOG_LEVEL:          'INFO'
+          BROWSER_HEADLESS:   'true'
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "🔍 DRY RUN — only checking Sheet"
             python tools/dry_run.py
           else
             python main.py
           fi
 
-      # ── Save State ────────────────────────────────────────────────────────
-      - name: 💾 Save State Cache
+      - name: 💾 Save State
         if: always()
         uses: actions/cache@v4
         with:
           path: state.json
           key: pipeline-state-${{ github.ref_name }}-${{ github.run_number }}
 
-      # ── Upload Logs ───────────────────────────────────────────────────────
+      - name: 📸 Upload Screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ github.run_number }}
+          path: logs/*.png
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: 📋 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-run-${{ github.run_number }}
+          name: logs-${{ github.run_number }}
           path: logs/
           retention-days: 7
 
-      # ── Summary ───────────────────────────────────────────────────────────
-      - name: 📊 Job Summary
+      - name: 📊 Summary
         if: always()
         run: |
-          echo "## 🎬 Video Pipeline Run #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎬 Google Vids Pipeline" >> $GITHUB_STEP_SUMMARY
           echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Method | **FREE** (Pollinations.ai + FFmpeg) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Cost | ₹0 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Time (UTC) | $(date -u) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Method | Google Vids (Veo 3.1) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cost | FREE (Google account) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Time | $(date -u) |" >> $GITHUB_STEP_SUMMARY

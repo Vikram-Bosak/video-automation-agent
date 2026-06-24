@@ -1,5 +1,4 @@
-# Video Automation Agent — FREE version
-# NO Playwright, NO browser automation needed
+# Video Automation Agent — Google Vids Version
 
 # Google APIs (Sheets + Drive)
 google-api-python-client>=2.100.0
@@ -7,9 +6,8 @@ google-auth>=2.23.0
 google-auth-oauthlib>=1.1.0
 google-auth-httplib2>=0.1.1
 
+# Browser automation (Google Vids)
+playwright>=1.40.0
+
 # Config
 python-dotenv>=1.0.0
-
-# Note: google-genai only needed if using Veo API (paid)
-# Uncomment below if switching to Veo API:
-# google-genai>=2.0.0
