@@ -252,16 +252,54 @@ class VideoGenerator:
             return False
         await self._shot(f"prompt_{num}")
 
-        # Generate button click
-        clicked = await self._click(
-            'button:has-text("Generate"), button.videoGenCreationViewGenerateButton',
-            timeout=10_000
-        )
+        # Set Portrait (9:16) orientation if Landscape tag visible
+        await self._set_portrait_orientation()
+
+        # Generate button click — multiple selector strategies
+        generate_selectors = [
+            'button:has-text("Generate")',
+            '[role="button"]:has-text("Generate")',
+            'div:has-text("Generate"):not(:has(div:has-text("Generate")))',
+            'button.videoGenCreationViewGenerateButton',
+            '[class*="generate" i]',
+            '[aria-label*="generate" i]',
+        ]
+        
+        clicked = False
+        for sel in generate_selectors:
+            if await self._click(sel, timeout=5000):
+                clicked = True
+                logger.info(f"   ✅ Generate clicked via: {sel}")
+                break
+        
+        if not clicked:
+            # Last resort: find Generate button by text content and click
+            try:
+                gen_btn = await self._page.evaluate('''() => {
+                    const els = document.querySelectorAll('*');
+                    for (const el of els) {
+                        if (el.textContent.trim() === 'Generate' && el.offsetParent !== null) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 50 && rect.height > 20) {
+                                el.click();
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }''')
+                if gen_btn:
+                    clicked = True
+                    logger.info("   ✅ Generate clicked via JS evaluate")
+            except Exception as e:
+                logger.warning(f"   JS click failed: {e}")
+        
         if not clicked:
             await self._shot(f"gen_fail_{num}")
             return False
 
         logger.info(f"   ⏳ Generating... (max {VIDEO_GEN_TIMEOUT_SEC}s)")
+        await self._shot(f"generating_{num}")
 
         # Wait for clip ready
         ready = await self._wait_ready(num)
@@ -282,6 +320,36 @@ class VideoGenerator:
 
         await self._delay(2, 3)
         return True
+
+    async def _set_portrait_orientation(self) -> None:
+        """Change Landscape to Portrait (9:16) if Landscape tag is visible."""
+        try:
+            # Look for Landscape tag/badge and click it to change
+            landscape_selectors = [
+                'text=Landscape',
+                '[class*="orientation"]:has-text("Landscape")',
+                '[aria-label*="Landscape"]',
+            ]
+            for sel in landscape_selectors:
+                el = await self._page.query_selector(sel)
+                if el and await el.is_visible():
+                    # Click the Landscape tag to open orientation options
+                    await el.click()
+                    await self._delay(1, 2)
+                    # Look for Portrait option
+                    for portrait_sel in [
+                        'text=Portrait',
+                        '[aria-label*="Portrait"]',
+                        'text=9:16',
+                    ]:
+                        if await self._click(portrait_sel, timeout=3000):
+                            logger.info("   📐 Changed to Portrait (9:16)")
+                            await self._delay(1, 2)
+                            return
+                    logger.warning("   Could not find Portrait option")
+                    return
+        except Exception as e:
+            logger.warning(f"   Orientation change failed: {e}")
 
     async def _open_panel(self) -> bool:
         # Check if already open
