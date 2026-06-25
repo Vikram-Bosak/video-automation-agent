@@ -342,7 +342,7 @@ class VideoGenerator:
     async def _set_portrait_orientation(self) -> None:
         """Change Landscape to Portrait (9:16)."""
         try:
-            # Find and click Landscape tag via JS
+            # Step 1: Click Landscape tag to open Video Size dialog
             clicked = await self._page.evaluate('''() => {
                 const els = document.querySelectorAll('*');
                 for (const el of els) {
@@ -360,30 +360,48 @@ class VideoGenerator:
                 logger.info("   No Landscape tag found — already Portrait or not visible")
                 return
             
-            logger.info("   📐 Clicked Landscape tag — looking for Portrait option...")
-            await self._delay(1, 2)
+            logger.info("   📐 Clicked Landscape tag — Video size dialog should open...")
+            await self._delay(2, 3)
             
-            # Click Portrait option
-            for portrait_sel in ['text=Portrait', '[aria-label*="Portrait"]', 'text=9:16']:
-                if await self._click(portrait_sel, timeout=3000):
-                    logger.info("   📐 Changed to Portrait (9:16)")
+            # Step 2: In Video Size dialog, select Portrait 9:16
+            # Try clicking the dropdown first
+            dropdown_selectors = [
+                'text=Portrait 9:16',
+                'text=Portrait',
+                '[aria-label*="Portrait"]',
+                'text=9:16',
+            ]
+            for sel in dropdown_selectors:
+                if await self._click(sel, timeout=3000):
+                    logger.info(f"   📐 Selected Portrait via: {sel}")
                     await self._delay(1, 2)
+                    break
+            
+            # Step 3: Click Apply button
+            apply_selectors = [
+                'button:has-text("Apply")',
+                '[role="button"]:has-text("Apply")',
+                'text=Apply',
+            ]
+            for sel in apply_selectors:
+                if await self._click(sel, timeout=3000):
+                    logger.info(f"   📐 Apply clicked via: {sel}")
+                    await self._delay(2, 3)
                     return
             
-            # JS fallback for Portrait click
+            # JS fallback for Apply
             await self._page.evaluate('''() => {
-                const els = document.querySelectorAll('*');
+                const els = document.querySelectorAll('button, [role="button"]');
                 for (const el of els) {
-                    const text = (el.textContent || '').trim();
-                    if (text === 'Portrait' || text === '9:16') {
+                    if ((el.textContent || '').trim() === 'Apply') {
                         el.click();
                         return true;
                     }
                 }
                 return false;
             }''')
-            logger.info("   📐 Portrait selected via JS")
-            await self._delay(1, 2)
+            logger.info("   📐 Apply clicked via JS")
+            await self._delay(2, 3)
             
         except Exception as e:
             logger.warning(f"   Portrait orientation failed: {e}")
