@@ -160,9 +160,9 @@ class VideoGenerator:
                 raise
             except Exception as e:
                 logger.warning(f"⚠️  cookies.json validation failed: {e}")
-        
-        await self._page.goto(GOOGLE_VIDS_URL, wait_until="networkidle", timeout=30_000)
-        await self._delay(2, 3)
+
+        await self._page.goto(GOOGLE_VIDS_URL, wait_until="domcontentloaded", timeout=60_000)
+        await self._delay(5, 8)
         url = self._page.url
         logger.info(f"📍 {url}")
 
