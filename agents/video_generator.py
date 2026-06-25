@@ -105,24 +105,80 @@ class VideoGenerator:
     # ─── Browser ──────────────────────────────────────────────────────────
 
     async def _start_browser(self):
+        """Stealth browser — Google ko real browser jaisa dikhata hai."""
         self._pw = await async_playwright().start()
+        
+        # Use headed mode with Xvfb (looks like real user, not bot)
+        # This helps cookies last 2-4 weeks instead of hours
+        launch_args = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-web-security",
+            "--window-size=1920,1080",
+        ]
+        
         self._browser = await self._pw.chromium.launch(
             headless=BROWSER_HEADLESS,
             slow_mo=BROWSER_SLOW_MO,
-            args=["--no-sandbox", "--disable-dev-shm-usage",
-                   "--disable-blink-features=AutomationControlled"],
+            args=launch_args,
         )
+        
+        # Real-looking browser fingerprint
         opts = {
-            "viewport": {"width": 1366, "height": 768},
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36",
+            "viewport": {"width": 1920, "height": 1080},
+            "user_agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+            ),
+            "locale": "en-US",
+            "timezone_id": "America/New_York",
+            "color_scheme": "light",
             "accept_downloads": True,
+            "extra_http_headers": {
+                "Accept-Language": "en-US,en;q=0.9",
+                "sec-ch-ua": '"Chromium";v="137", "Not/A)Brand";v="24", "Google Chrome";v="137"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Linux"',
+            },
         }
+        
         if COOKIES_FILE.exists():
             opts["storage_state"] = str(COOKIES_FILE)
             logger.info("🍪 Cookies loaded")
+        
         self._ctx = await self._browser.new_context(**opts)
+        
+        # Inject stealth scripts to avoid bot detection
+        await self._ctx.add_init_script("""
+            // Override navigator.webdriver (Google checks this)
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            
+            // Override navigator.plugins (headless has empty plugins)
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            
+            // Override navigator.languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+            
+            // Override chrome runtime
+            window.chrome = {runtime: {}};
+            
+            // Override permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+        """)
+        
         self._page = await self._ctx.new_page()
-        logger.info(f"✅ Browser ready | Headless: {BROWSER_HEADLESS}")
+        logger.info(f"✅ Stealth browser ready | Headless: {BROWSER_HEADLESS}")
 
     async def _stop(self):
         try:

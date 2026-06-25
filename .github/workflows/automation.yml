@@ -40,6 +40,9 @@ jobs:
       - name: 🌐 Install Playwright
         run: playwright install chromium --with-deps
 
+      - name: 🖥️ Install Xvfb (virtual display)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       - name: 📁 Create Directories
         run: mkdir -p downloads logs
 
@@ -87,12 +90,13 @@ jobs:
           DRIVE_FOLDER_ID:    ${{ secrets.DRIVE_FOLDER_ID }}
           GOOGLE_PROJECT_ID:  ${{ secrets.GOOGLE_PROJECT_ID }}
           LOG_LEVEL:          'INFO'
-          BROWSER_HEADLESS:   'true'
+          BROWSER_HEADLESS:   'false'
         run: |
+          # Run with Xvfb (virtual display) — looks like real user, cookies last 2-4 weeks
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             python tools/dry_run.py
           else
-            python main.py
+            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python main.py
           fi
 
       - name: 💾 Save State
