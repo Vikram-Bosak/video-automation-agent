@@ -138,12 +138,44 @@ class VideoGenerator:
     # ─── Login ─────────────────────────────────────────────────────────────
 
     async def _login(self):
+        # ── Step 1: Validate cookies first ──────────────────────────────
+        if COOKIES_FILE.exists():
+            try:
+                import json as _json
+                cookie_data = _json.loads(COOKIES_FILE.read_text())
+                cookies = cookie_data.get("cookies", [])
+                if not cookies:
+                    logger.error("❌ cookies.json is EMPTY — no cookies found!")
+                    logger.error("   → Solution: Refresh cookies (see README)")
+                    raise RuntimeError("cookies.json is empty. Google session expired. Please refresh cookies.")
+                
+                # Check if cookies have Google auth tokens
+                google_cookies = [c for c in cookies if "google" in c.get("domain", "")]
+                if not google_cookies:
+                    logger.error("❌ cookies.json has no Google cookies!")
+                    raise RuntimeError("No Google cookies found. Please refresh cookies.")
+                
+                logger.info(f"🍪 Cookies loaded: {len(cookies)} total, {len(google_cookies)} Google cookies")
+            except RuntimeError:
+                raise
+            except Exception as e:
+                logger.warning(f"⚠️  cookies.json validation failed: {e}")
+        
         await self._page.goto(GOOGLE_VIDS_URL, wait_until="networkidle", timeout=30_000)
         await self._delay(2, 3)
         url = self._page.url
         logger.info(f"📍 {url}")
 
         if "accounts.google.com" in url or "signin" in url.lower():
+            logger.error("❌ Google login page detected — cookies are EXPIRED!")
+            logger.error("   ┌─────────────────────────────────────────────────┐")
+            logger.error("   │  HOW TO REFRESH COOKIES:                        │")
+            logger.error("   │  1. Open Chrome → login to accounts.google.com  │")
+            logger.error("   │  2. Go to docs.google.com/videos                │")
+            logger.error("   │  3. Install 'EditThisCookie' extension           │")
+            logger.error("   │  4. Export cookies → base64 encode               │")
+            logger.error("   │  5. Update GOOGLE_COOKIES in GitHub Secrets      │")
+            logger.error("   └─────────────────────────────────────────────────┘")
             email = os.environ.get("GOOGLE_ACCOUNT_EMAIL", "")
             pw = os.environ.get("GOOGLE_ACCOUNT_PASSWORD", "")
             if email and pw:
@@ -157,7 +189,11 @@ class VideoGenerator:
                 await self._delay(3, 5)
                 logger.info("✅ Logged in")
             else:
-                raise RuntimeError("Login required! cookies.json ya credentials set karo.")
+                raise RuntimeError(
+                    "Google login required but no credentials found!\n"
+                    "Set GOOGLE_ACCOUNT_EMAIL + GOOGLE_ACCOUNT_PASSWORD in GitHub Secrets,\n"
+                    "OR refresh cookies.json via browser export."
+                )
         else:
             logger.info("✅ Already logged in")
 
