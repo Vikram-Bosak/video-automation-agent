@@ -255,44 +255,62 @@ class VideoGenerator:
         # Set Portrait (9:16) orientation if Landscape tag visible
         await self._set_portrait_orientation()
 
-        # Generate button click — multiple selector strategies
-        generate_selectors = [
+        # Generate button click — aggressive multi-strategy approach
+        clicked = False
+        
+        # Strategy 1: Standard Playwright selectors
+        for sel in [
             'button:has-text("Generate")',
             '[role="button"]:has-text("Generate")',
-            'div:has-text("Generate"):not(:has(div:has-text("Generate")))',
             'button.videoGenCreationViewGenerateButton',
-            '[class*="generate" i]',
-            '[aria-label*="generate" i]',
-        ]
-        
-        clicked = False
-        for sel in generate_selectors:
+        ]:
             if await self._click(sel, timeout=5000):
                 clicked = True
-                logger.info(f"   ✅ Generate clicked via: {sel}")
+                logger.info(f"   ✅ Generate clicked via selector: {sel}")
                 break
         
+        # Strategy 2: JavaScript click — find by text content
         if not clicked:
-            # Last resort: find Generate button by text content and click
             try:
                 gen_btn = await self._page.evaluate('''() => {
-                    const els = document.querySelectorAll('*');
+                    // Find all elements with "Generate" text
+                    const els = document.querySelectorAll('button, [role="button"], div, span');
                     for (const el of els) {
-                        if (el.textContent.trim() === 'Generate' && el.offsetParent !== null) {
-                            const rect = el.getBoundingClientRect();
-                            if (rect.width > 50 && rect.height > 20) {
-                                el.click();
-                                return true;
-                            }
+                        const text = (el.textContent || '').trim();
+                        const rect = el.getBoundingClientRect();
+                        // Must be visible, right panel (x > 900), blue-ish button
+                        if (text === 'Generate' && rect.width > 50 && rect.height > 20 && rect.x > 900) {
+                            el.click();
+                            return {clicked: true, tag: el.tagName, x: rect.x, y: rect.y};
                         }
                     }
-                    return false;
+                    // Fallback: find any element with "Generate" text in the right panel
+                    for (const el of els) {
+                        const text = (el.textContent || '').trim();
+                        const rect = el.getBoundingClientRect();
+                        if (text === 'Generate' && rect.x > 800 && rect.width > 30) {
+                            el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                            return {clicked: true, tag: el.tagName, x: rect.x, y: rect.y, fallback: true};
+                        }
+                    }
+                    return {clicked: false};
                 }''')
-                if gen_btn:
+                if gen_btn and gen_btn.get('clicked'):
                     clicked = True
-                    logger.info("   ✅ Generate clicked via JS evaluate")
+                    logger.info(f"   ✅ Generate clicked via JS: {gen_btn}")
             except Exception as e:
                 logger.warning(f"   JS click failed: {e}")
+        
+        # Strategy 3:坐标 click — exact position from screenshot
+        if not clicked:
+            try:
+                logger.info("   Trying coordinate click at Generate button position...")
+                await self._page.mouse.click(1085, 490)  # Approximate position from screenshot
+                await self._delay(1, 2)
+                clicked = True
+                logger.info("   ✅ Generate clicked via coordinates")
+            except Exception as e:
+                logger.warning(f"   Coordinate click failed: {e}")
         
         if not clicked:
             await self._shot(f"gen_fail_{num}")
@@ -322,34 +340,53 @@ class VideoGenerator:
         return True
 
     async def _set_portrait_orientation(self) -> None:
-        """Change Landscape to Portrait (9:16) if Landscape tag is visible."""
+        """Change Landscape to Portrait (9:16)."""
         try:
-            # Look for Landscape tag/badge and click it to change
-            landscape_selectors = [
-                'text=Landscape',
-                '[class*="orientation"]:has-text("Landscape")',
-                '[aria-label*="Landscape"]',
-            ]
-            for sel in landscape_selectors:
-                el = await self._page.query_selector(sel)
-                if el and await el.is_visible():
-                    # Click the Landscape tag to open orientation options
-                    await el.click()
+            # Find and click Landscape tag via JS
+            clicked = await self._page.evaluate('''() => {
+                const els = document.querySelectorAll('*');
+                for (const el of els) {
+                    const text = (el.textContent || '').trim();
+                    const rect = el.getBoundingClientRect();
+                    if (text === 'Landscape' && rect.width > 20 && rect.height > 10 && rect.x > 900) {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            }''')
+            
+            if not clicked:
+                logger.info("   No Landscape tag found — already Portrait or not visible")
+                return
+            
+            logger.info("   📐 Clicked Landscape tag — looking for Portrait option...")
+            await self._delay(1, 2)
+            
+            # Click Portrait option
+            for portrait_sel in ['text=Portrait', '[aria-label*="Portrait"]', 'text=9:16']:
+                if await self._click(portrait_sel, timeout=3000):
+                    logger.info("   📐 Changed to Portrait (9:16)")
                     await self._delay(1, 2)
-                    # Look for Portrait option
-                    for portrait_sel in [
-                        'text=Portrait',
-                        '[aria-label*="Portrait"]',
-                        'text=9:16',
-                    ]:
-                        if await self._click(portrait_sel, timeout=3000):
-                            logger.info("   📐 Changed to Portrait (9:16)")
-                            await self._delay(1, 2)
-                            return
-                    logger.warning("   Could not find Portrait option")
                     return
+            
+            # JS fallback for Portrait click
+            await self._page.evaluate('''() => {
+                const els = document.querySelectorAll('*');
+                for (const el of els) {
+                    const text = (el.textContent || '').trim();
+                    if (text === 'Portrait' || text === '9:16') {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            }''')
+            logger.info("   📐 Portrait selected via JS")
+            await self._delay(1, 2)
+            
         except Exception as e:
-            logger.warning(f"   Orientation change failed: {e}")
+            logger.warning(f"   Portrait orientation failed: {e}")
 
     async def _open_panel(self) -> bool:
         # Check if already open
