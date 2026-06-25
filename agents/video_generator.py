@@ -363,45 +363,74 @@ class VideoGenerator:
             logger.info("   📐 Clicked Landscape tag — Video size dialog should open...")
             await self._delay(2, 3)
             
-            # Step 2: In Video Size dialog, select Portrait 9:16
-            # Try clicking the dropdown first
-            dropdown_selectors = [
-                'text=Portrait 9:16',
-                'text=Portrait',
-                '[aria-label*="Portrait"]',
-                'text=9:16',
-            ]
-            for sel in dropdown_selectors:
-                if await self._click(sel, timeout=3000):
-                    logger.info(f"   📐 Selected Portrait via: {sel}")
-                    await self._delay(1, 2)
-                    break
+            # Step 2: Video Size dialog should be open now
+            # Screenshot to verify dialog is open
+            await self._shot("portrait_dialog")
             
-            # Step 3: Click Apply button
-            apply_selectors = [
-                'button:has-text("Apply")',
-                '[role="button"]:has-text("Apply")',
-                'text=Apply',
-            ]
-            for sel in apply_selectors:
-                if await self._click(sel, timeout=3000):
-                    logger.info(f"   📐 Apply clicked via: {sel}")
-                    await self._delay(2, 3)
-                    return
-            
-            # JS fallback for Apply
-            await self._page.evaluate('''() => {
-                const els = document.querySelectorAll('button, [role="button"]');
+            # Step 2a: Click the dropdown to see options
+            dropdown_clicked = await self._page.evaluate('''() => {
+                const els = document.querySelectorAll('*');
                 for (const el of els) {
-                    if ((el.textContent || '').trim() === 'Apply') {
+                    const text = (el.textContent || '').trim();
+                    const rect = el.getBoundingClientRect();
+                    // Find the dropdown that shows "Landscape" or has a caret
+                    if ((text === 'Landscape' || text.includes('Landscape')) && rect.width > 100 && rect.height > 20 && rect.y > 200) {
                         el.click();
-                        return true;
+                        return {clicked: true, text: text.substring(0, 30), x: rect.x, y: rect.y};
                     }
                 }
-                return false;
+                return {clicked: false};
             }''')
-            logger.info("   📐 Apply clicked via JS")
-            await self._delay(2, 3)
+            logger.info(f"   📐 Dropdown click result: {dropdown_clicked}")
+            await self._delay(1, 2)
+            
+            # Step 2b: Now look for Portrait option in dropdown
+            portrait_clicked = await self._page.evaluate('''() => {
+                const els = document.querySelectorAll('*');
+                for (const el of els) {
+                    const text = (el.textContent || '').trim();
+                    const rect = el.getBoundingClientRect();
+                    if (text === 'Portrait' && rect.width > 20 && rect.height > 10 && rect.y > 200) {
+                        el.click();
+                        return {clicked: true, text, x: rect.x, y: rect.y};
+                    }
+                }
+                // Fallback: look for 9:16
+                for (const el of els) {
+                    const text = (el.textContent || '').trim();
+                    const rect = el.getBoundingClientRect();
+                    if (text === '9:16' && rect.width > 20 && rect.height > 10) {
+                        el.click();
+                        return {clicked: true, text, x: rect.x, y: rect.y, fallback: true};
+                    }
+                }
+                return {clicked: false};
+            }''')
+            logger.info(f"   📐 Portrait click result: {portrait_clicked}")
+            await self._shot("portrait_selected")
+            await self._delay(1, 2)
+            
+            # Step 3: Click Apply button
+            apply_clicked = await self._page.evaluate('''() => {
+                const els = document.querySelectorAll('button, [role="button"], div');
+                for (const el of els) {
+                    const text = (el.textContent || '').trim();
+                    const rect = el.getBoundingClientRect();
+                    if (text === 'Apply' && rect.width > 50 && rect.height > 20 && rect.y > 300) {
+                        el.click();
+                        return {clicked: true, x: rect.x, y: rect.y};
+                    }
+                }
+                return {clicked: false};
+            }''')
+            logger.info(f"   📐 Apply click result: {apply_clicked}")
+            await self._shot("portrait_applied")
+            await self._delay(3, 5)
+            
+            if portrait_clicked.get('clicked') and apply_clicked.get('clicked'):
+                logger.info("   📐 Portrait (9:16) orientation APPLIED!")
+            else:
+                logger.warning(f"   📐 Portrait change may have failed: portrait={portrait_clicked}, apply={apply_clicked}")
             
         except Exception as e:
             logger.warning(f"   Portrait orientation failed: {e}")
