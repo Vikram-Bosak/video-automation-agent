@@ -201,23 +201,33 @@ class VideoGenerator:
 
     async def _new_project(self):
         logger.info("📹 Creating project...")
-        await self._page.goto(GOOGLE_VIDS_URL, wait_until="networkidle", timeout=30_000)
+        await self._page.goto(GOOGLE_VIDS_URL, wait_until="domcontentloaded", timeout=60_000)
+        await self._delay(5, 8)  # Wait for dynamic content to load
         await self._delay(2, 3)
 
-        # Click "Blank video" / "Create"
+        # Click "Blank video" template — verified selectors for Google Vids UI
         for sel in [
-            'button:has-text("Blank video")',
-            'button:has-text("New video")',
-            '[aria-label*="Blank video"]',
-            '[aria-label*="New video"]',
-            '.docs-homescreen-fab',
-            'button:has-text("Create")',
+            '[role="option"]:has-text("Blank video")',           # Actual: listbox option
+            '.docs-homescreen-templates-templateview:has-text("Blank video")',  # Actual class
+            'text=Blank video',                                  # Simple text match
+            '[role="listbox"] [role="option"]',                  # Any template option
+            '.docs-homescreen-templates-templateview',           # First template
+            'button:has-text("Blank video")',                    # Fallback
+            'button:has-text("New video")',                      # Fallback
+            'button:has-text("Create")',                         # Fallback
         ]:
             if await self._click(sel, timeout=5000):
                 logger.info(f"✅ Clicked: {sel}")
                 break
         else:
-            raise RuntimeError("Create button nahi mila!")
+            # Last resort: try clicking by coordinates (template card area)
+            logger.warning("Standard selectors failed, trying coordinate click...")
+            try:
+                # Click in the template area (top-left of content)
+                await self._page.mouse.click(300, 170)
+                await self._delay(2, 3)
+            except Exception as e:
+                raise RuntimeError(f"Create button nahi mila! Error: {e}")
 
         await self._page.wait_for_url("**/videos/d/**", timeout=30_000)
         await self._delay(3, 5)
