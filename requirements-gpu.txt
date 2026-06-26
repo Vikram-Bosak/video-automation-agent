@@ -1,0 +1,24 @@
+# LTX-2.3 GPU Requirements
+# Install on machine with NVIDIA GPU (8GB+ VRAM)
+
+# PyTorch with CUDA
+torch>=2.1.0
+torchvision>=0.16.0
+
+# Diffusers (LTX-2.3 pipeline)
+diffusers>=0.30.0
+transformers>=4.40.0
+accelerate>=0.30.0
+safetensors>=0.4.0
+
+# Video export
+imageio[ffmpeg]>=2.31.0
+
+# Memory optimization
+xformers>=0.0.23  # Optional: faster attention
+
+# Basic deps
+python-dotenv>=1.0.0
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-httplib2>=0.1.1

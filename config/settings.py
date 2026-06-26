@@ -121,3 +121,8 @@ def validate_config() -> list[str]:
         errors.append("GOOGLE_PROJECT_ID not set")
 
     return errors
+
+# ─── LTX-2.3 Settings ────────────────────────────────────────────────────────
+LTX_MODEL_PATH    = os.environ.get("LTX_MODEL_PATH", "")  # Empty = auto-download
+LTX_DEVICE        = os.environ.get("LTX_DEVICE", "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu")
+LTX_QUANTIZATION  = os.environ.get("LTX_QUANTIZATION", "fp8")  # fp8 for 8GB VRAM
